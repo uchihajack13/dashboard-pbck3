@@ -23,7 +23,6 @@ st.markdown("""
         font-family: 'Plus Jakarta Sans', sans-serif;
     }
 
-    /* Container Kartu KPI */
     .kpi-card {
         background: #FFFFFF;
         border: 1px solid #E2E8F0;
@@ -38,7 +37,6 @@ st.markdown("""
         box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
     }
 
-    /* Varian Garis Aksen Samping */
     .border-blue { border-left: 5px solid #1E3A8A; }
     .border-green { border-left: 5px solid #059669; }
     .border-amber { border-left: 5px solid #D97706; }
@@ -46,7 +44,6 @@ st.markdown("""
     .border-slate { border-left: 5px solid #475569; }
     .border-red { border-left: 5px solid #DC2626; }
 
-    /* Label & Nilai Metrik */
     .kpi-header {
         display: flex;
         justify-content: space-between;
@@ -64,7 +61,7 @@ st.markdown("""
         font-size: 16px;
     }
     .kpi-value {
-        font-size: 22px;
+        font-size: 21px;
         font-weight: 800;
         color: #0F172A;
         line-height: 1.2;
@@ -76,7 +73,6 @@ st.markdown("""
         color: #64748B;
     }
 
-    /* Badge Tag */
     .badge-success {
         background-color: #ECFDF5;
         color: #047857;
@@ -114,7 +110,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Helper Format Angka Indonesia (Titik untuk ribuan)
+# Format Helpers
 def fmt_rupiah(val):
     if pd.isna(val) or val == 0:
         return "Rp 0"
@@ -144,7 +140,7 @@ with col_header:
 # ==============================================================================
 # 3. KONEKSI & LOAD DATA CLOUD
 # ==============================================================================
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=60)
 def load_data():
     sheet_id = "15vLiGh3HzvYPF5Ru_b9ndD2PQKBUrXok"
     url_merge = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
@@ -160,21 +156,13 @@ except Exception as e:
     st.stop()
 
 # ==============================================================================
-# 4. RESOLVING GHOST COLUMNS & FORMAT DATA
+# 4. RESOLVING COLUMNS & SMART DATE PARSER
 # ==============================================================================
 col_pabrik = "PERUSAHAAN" if "PERUSAHAAN" in df.columns else ("PERUSAHAAN_KEP" if "PERUSAHAAN_KEP" in df.columns else df.columns[1])
 col_pbck3 = "NO_PBCK-3" if "NO_PBCK-3" in df.columns else ("NO_PBCK_3" if "NO_PBCK_3" in df.columns else df.columns[0])
 col_tgl_pbck3 = "TANGGAL_PBCK-3" if "TANGGAL_PBCK-3" in df.columns else "TANGGAL_PBCK3"
 col_back3 = "BACK-3" if "BACK-3" in df.columns else df.columns[0]
-
-# KUNCI PERBAIKAN: Prioritaskan TANGGAL_BACK-3 (kolom tanggal asli)
-if "TANGGAL_BACK-3" in df.columns:
-    col_tgl_back3 = "TANGGAL_BACK-3"
-elif "TGL_BACK-3" in df.columns:
-    col_tgl_back3 = "TGL_BACK-3"
-else:
-    col_tgl_back3 = "TANGGAL BACK-3"
-
+col_tgl_back3 = "TANGGAL_BACK-3" if "TANGGAL_BACK-3" in df.columns else ("TGL_BACK-3" if "TGL_BACK-3" in df.columns else "TANGGAL BACK-3")
 col_ck2 = "NO_CK-2" if "NO_CK-2" in df.columns else "NO_CK2"
 col_tgl_ck2 = "TGL_CK-2" if "TGL_CK-2" in df.columns else "TGL_CK_2"
 
@@ -185,19 +173,21 @@ col_biaya_pengganti = "JUMLAH_BP" if "JUMLAH_BP" in df.columns else ("JUMLAH BP"
 col_bks_pbck3 = "TOTAL_BUNGKUS" if "TOTAL_BUNGKUS" in df.columns else "TOTAL BUNGKUS"
 col_bks_ck2 = "TOTAL_BUNGKUS_MS" if "TOTAL_BUNGKUS_MS" in df.columns else "TOTAL BUNGKUS MS"
 
-# Format Tanggal ke Datetime
+# Parser Tanggal (Multi-Format Kebal Text)
 for c_date in [col_tgl_pbck3, col_tgl_back3, col_tgl_ck2]:
     if c_date in df.columns:
         df[c_date] = pd.to_datetime(df[c_date], errors='coerce')
 
-df['TAHUN_PBCK'] = df[col_tgl_pbck3].dt.year.fillna(2026).astype(int) if col_tgl_pbck3 in df.columns else 2026
-df['BULAN_ANGKA'] = df[col_tgl_pbck3].dt.month.fillna(1).astype(int) if col_tgl_pbck3 in df.columns else 1
+# ⚠️ PERBAIKAN KRUSIAL: Filter Bulan 100% Mengacu pada TGL_CK-2 (Bukan TANGGAL_PBCK-3)
+# Baris yang belum terbit CK-2 dibiarkan NaN (bukan di-fillna 1 ke Januari!)
+df['TAHUN_CK2'] = df[col_tgl_ck2].dt.year
+df['BULAN_CK2_ANGKA'] = df[col_tgl_ck2].dt.month
 
 INDO_BULAN = {
     1: 'Januari', 2: 'Februari', 3: 'Maret', 4: 'April', 5: 'Mei', 6: 'Juni',
     7: 'Juli', 8: 'Agustus', 9: 'September', 10: 'Oktober', 11: 'November', 12: 'Desember'
 }
-df['BULAN_NAMA'] = df['BULAN_ANGKA'].map(INDO_BULAN)
+df['BULAN_CK2_NAMA'] = df['BULAN_CK2_ANGKA'].map(INDO_BULAN)
 
 # Konversi Kolom Numerik Bersih
 def clean_num(series):
@@ -216,7 +206,7 @@ if col_biaya_pengganti in df.columns: df[col_biaya_pengganti] = clean_num(df[col
 if col_bks_pbck3 in df.columns: df[col_bks_pbck3] = clean_num(df[col_bks_pbck3])
 if col_bks_ck2 in df.columns: df[col_bks_ck2] = clean_num(df[col_bks_ck2])
 
-# Hitung Selisih Kemasan TMS (Tidak Memenuhi Syarat)
+# Hitung Selisih Kemasan TMS
 df['BUNGKUS_TMS'] = df[col_bks_pbck3] - df[col_bks_ck2]
 df['BUNGKUS_TMS'] = df['BUNGKUS_TMS'].apply(lambda x: x if x > 0 else 0)
 
@@ -225,43 +215,54 @@ df['BUNGKUS_TMS'] = df['BUNGKUS_TMS'].apply(lambda x: x if x > 0 else 0)
 # ==============================================================================
 st.sidebar.markdown("### 🎛️ Filter Dasbor")
 
+# Filter A: Perusahaan Pabrik
 pabrik_list = ["Semua Pabrik"] + sorted(df[col_pabrik].dropna().unique().tolist())
 selected_pabrik = st.sidebar.selectbox("Pilih Pabrik / Perusahaan:", pabrik_list)
 
-tahun_list = sorted(df['TAHUN_PBCK'].unique().tolist(), reverse=True)
-selected_tahun = st.sidebar.selectbox("Pilih Tahun:", tahun_list)
+# Filter B: Tahun Berdasarkan Realisasi CK-2
+tahun_tersedia = [2026]
+if df['TAHUN_CK2'].dropna().nunique() > 0:
+    tahun_tersedia = sorted(df['TAHUN_CK2'].dropna().unique().astype(int).tolist(), reverse=True)
+selected_tahun = st.sidebar.selectbox("Pilih Tahun Anggaran:", tahun_tersedia)
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 🗓️ Filter Periode Bulanan")
+st.sidebar.markdown("### 🗓️ Filter Periode Terbit CK-2")
 mode_periode = st.sidebar.radio(
     "Mode Periode:",
-    ["Semua Periode", "Bulanan Tunggal (Single Month)", "Kumulatif (s.d. Bulan)"],
-    help="Gunakan untuk laporan evaluasi berkala bulanan atau capaian kumulatif YTD."
+    ["Semua Periode (Total Tahunan)", "Bulanan Tunggal (Single Month)", "Kumulatif (s.d. Bulan)"],
+    help="Menyaring berkas berdasarkan bulan resmi diterbitkannya dokumen CK-2."
 )
 
-selected_bulan_nama = "Januari"
-selected_bulan_angka = 1
-if mode_periode != "Semua Periode":
-    nama_bulan_list = [INDO_BULAN[i] for i in sorted(df[df['TAHUN_PBCK'] == selected_tahun]['BULAN_ANGKA'].unique())]
-    if not nama_bulan_list:
-        nama_bulan_list = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember']
-    selected_bulan_nama = st.sidebar.selectbox("Pilih Bulan Acuan:", nama_bulan_list)
+selected_bulan_nama = "Agustus"
+selected_bulan_angka = 8
+
+# Daftar 12 Bulan Lengkap Kalender
+list_12_bulan = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember']
+
+if mode_periode != "Semua Periode (Total Tahunan)":
+    selected_bulan_nama = st.sidebar.selectbox("Pilih Bulan CK-2:", list_12_bulan, index=7) # Default ke Agustus
     selected_bulan_angka = next(k for k, v in INDO_BULAN.items() if v == selected_bulan_nama)
 
 # ==============================================================================
-# 6. LOGIKA FILTERING
+# 6. LOGIKA FILTERING DATA
 # ==============================================================================
 df_filtered = df.copy()
 
+# Filter Perusahaan
 if selected_pabrik != "Semua Pabrik":
     df_filtered = df_filtered[df_filtered[col_pabrik] == selected_pabrik]
 
-df_filtered = df_filtered[df_filtered['TAHUN_PBCK'] == selected_tahun]
-
+# Filter Periode CK-2 (Hanya berkas yang sudah terbit CK-2 di bulan bersangkutan)
 if mode_periode == "Bulanan Tunggal (Single Month)":
-    df_filtered = df_filtered[df_filtered['BULAN_ANGKA'] == selected_bulan_angka]
+    df_filtered = df_filtered[
+        (df_filtered['TAHUN_CK2'] == selected_tahun) & 
+        (df_filtered['BULAN_CK2_ANGKA'] == selected_bulan_angka)
+    ]
 elif mode_periode == "Kumulatif (s.d. Bulan)":
-    df_filtered = df_filtered[df_filtered['BULAN_ANGKA'] <= selected_bulan_angka]
+    df_filtered = df_filtered[
+        (df_filtered['TAHUN_CK2'] == selected_tahun) & 
+        (df_filtered['BULAN_CK2_ANGKA'] <= selected_bulan_angka)
+    ]
 
 # ==============================================================================
 # 7. PERHITUNGAN METRIK EKSEKUTIF
@@ -280,13 +281,13 @@ else:
 total_outstanding = total_pbck3 - total_ck2
 persen_selesai = (total_ck2 / total_pbck3 * 100) if total_pbck3 > 0 else 0
 
-# Nilai Finansial Cukai
+# Nilai Keuangan
 cukai_pbck3_val = df_filtered[col_cukai_pbck3].sum() if col_cukai_pbck3 in df_filtered.columns else 0
 cukai_ck2_val = df_filtered[col_cukai_ck2].sum() if col_cukai_ck2 in df_filtered.columns else 0
 selisih_fisik = cukai_pbck3_val - cukai_ck2_val
 biaya_pengganti = df_filtered[col_biaya_pengganti].sum() if col_biaya_pengganti in df_filtered.columns else 0
 
-# Volume Kemasan / Bungkus
+# Volume Kemasan
 total_bks_pbck3 = df_filtered[col_bks_pbck3].sum() if col_bks_pbck3 in df_filtered.columns else 0
 total_bks_ck2 = df_filtered[col_bks_ck2].sum() if col_bks_ck2 in df_filtered.columns else 0
 total_bks_tms = total_bks_pbck3 - total_bks_ck2
@@ -295,20 +296,20 @@ total_bks_tms = total_bks_tms if total_bks_tms > 0 else 0
 # Label Info Periode
 visual_periode_lbl = f"Tahun Anggaran {selected_tahun}"
 if mode_periode == "Bulanan Tunggal (Single Month)":
-    visual_periode_lbl = f"Bulan {selected_bulan_nama} {selected_tahun}"
+    visual_periode_lbl = f"Bulan Realisasi {selected_bulan_nama} {selected_tahun}"
 elif mode_periode == "Kumulatif (s.d. Bulan)":
-    visual_periode_lbl = f"Januari s.d. {selected_bulan_nama} {selected_tahun}"
+    visual_periode_lbl = f"Realisasi s.d. Bulan {selected_bulan_nama} {selected_tahun}"
 
 st.markdown(f"""
 <div class="info-banner">
-    📌 <b>Periode Aktif:</b> <code>{visual_periode_lbl}</code> &nbsp;|&nbsp; 
+    📌 <b>Periode Terpantau:</b> <code>{visual_periode_lbl}</code> &nbsp;|&nbsp; 
     🏢 <b>Entitas:</b> <code>{selected_pabrik}</code> &nbsp;|&nbsp; 
     📄 <b>Status Rekonsiliasi:</b> {'<span class="badge-success">Fisik 100% Sesuai</span>' if selisih_fisik == 0 else f'<span class="badge-danger">Selisih Fisik: -{fmt_rupiah(selisih_fisik)} ({fmt_bungkus(total_bks_tms)} Bks TMS)</span>'}
 </div>
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 8. PANEL METRIK MODERN UI (BERSIH & DETAIL)
+# 8. PANEL METRIK MODERN UI
 # ==============================================================================
 
 # BARIS 1: VOLUME DOKUMEN & KINERJA PELAYANAN
@@ -318,11 +319,11 @@ with r1_c1:
     st.markdown(f"""
     <div class="kpi-card border-blue">
         <div class="kpi-header">
-            <span class="kpi-label">Permohonan PBCK-3</span>
+            <span class="kpi-label">Permohonan PBCK-3 Terlayani</span>
             <span class="kpi-icon">📥</span>
         </div>
         <div class="kpi-value">{total_pbck3:,} <span style="font-size: 14px; color: #64748B;">Berkas</span></div>
-        <div class="kpi-subtext">Pengajuan resmi pengusaha pabrik</div>
+        <div class="kpi-subtext">Pengajuan permohonan pada periode terpilih</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -330,12 +331,12 @@ with r1_c2:
     st.markdown(f"""
     <div class="kpi-card border-green">
         <div class="kpi-header">
-            <span class="kpi-label">Realisasi Selesai (CK-2 Terbit)</span>
+            <span class="kpi-label">Realisasi CK-2 Terbit</span>
             <span class="kpi-icon">📜</span>
         </div>
         <div class="kpi-value">{total_ck2:,} <span style="font-size: 14px; color: #64748B;">Dokumen</span></div>
         <div class="kpi-subtext">
-            <span class="badge-success">{persen_selesai:.1f}% Selesai</span> dari total permohonan
+            <span class="badge-success">{persen_selesai:.1f}% Selesai</span> dokumen resmi diterbitkan
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -395,7 +396,7 @@ with r2_c3:
     </div>
     """, unsafe_allow_html=True)
 
-# BARIS 3: VOLUME KEMASAN / BUNGKUS (DIAJUKAN, DISETUJUI, DITOLAK/TMS)
+# BARIS 3: VOLUME KEMASAN / BUNGKUS
 r3_c1, r3_c2, r3_c3 = st.columns(3)
 
 with r3_c1:
@@ -443,37 +444,28 @@ st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 col_chart1, col_chart2 = st.columns([6, 5])
 
 with col_chart1:
-    st.subheader("📈 Tren Kinerja Pelayanan Bulanan")
-    st.caption("Visualisasi permohonan masuk (Inflow PBCK-3) vs CK-2 terbit (Outflow).")
+    st.subheader("📈 Tren Realisasi CK-2 per Bulan")
+    st.caption("Visualisasi volume dokumen yang resmi rampung terbit CK-2 sepanjang tahun.")
     
-    df_trend_monthly = df_filtered.groupby('BULAN_ANGKA').agg(
-        PBCK3=(col_pbck3, 'count') if col_pbck3 in df_filtered.columns else ('BULAN_ANGKA', 'count'),
-        CK2=('STATUS_CK2_BOOL', lambda x: (x == "TERBIT").sum())
+    # Tren Berdasarkan TGL_CK-2
+    df_trend = df[df['STATUS_CK2_BOOL'] == "TERBIT"].groupby('BULAN_CK2_ANGKA').agg(
+        CK2=(col_ck2, 'nunique')
     ).reset_index()
     
-    df_trend_monthly['BULAN'] = df_trend_monthly['BULAN_ANGKA'].map(INDO_BULAN)
+    df_trend['BULAN'] = df_trend['BULAN_CK2_ANGKA'].map(INDO_BULAN)
     
     fig_trend = go.Figure()
     fig_trend.add_trace(go.Bar(
-        x=df_trend_monthly['BULAN'],
-        y=df_trend_monthly['PBCK3'],
-        name='PBCK-3 Masuk',
+        x=df_trend['BULAN'],
+        y=df_trend['CK2'],
+        name='Dokumen CK-2 Terbit',
         marker_color='#1E3A8A',
-        opacity=0.88
-    ))
-    fig_trend.add_trace(go.Scatter(
-        x=df_trend_monthly['BULAN'],
-        y=df_trend_monthly['CK2'],
-        name='CK-2 Terbit',
-        marker_color='#F59E0B',
-        mode='lines+markers',
-        line=dict(width=3.5)
+        text=df_trend['CK2'],
+        textposition='auto'
     ))
     fig_trend.update_layout(
-        barmode='group',
-        xaxis_title="Periode Bulan",
-        yaxis_title="Volume Dokumen",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis_title="Bulan Terbit CK-2",
+        yaxis_title="Jumlah Dokumen",
         height=320,
         margin=dict(t=15, b=15, l=10, r=10)
     )
@@ -482,20 +474,25 @@ with col_chart1:
 with col_chart2:
     st.subheader("📊 Kontribusi Realisasi Nilai Cukai (CK-2)")
     st.caption("Distribusi nilai pengembalian cukai yang memenuhi syarat (MS) per pabrik.")
-    if col_pabrik in df_filtered.columns and col_cukai_ck2 in df_filtered.columns:
+    if col_pabrik in df_filtered.columns and col_cukai_ck2 in df_filtered.columns and not df_filtered.empty:
         df_pabrik_grp = df_filtered.groupby(col_pabrik)[col_cukai_ck2].sum().reset_index()
+        df_pabrik_grp = df_pabrik_grp[df_pabrik_grp[col_cukai_ck2] > 0]
         df_pabrik_grp = df_pabrik_grp.sort_values(by=col_cukai_ck2, ascending=False).head(5)
-        fig_pie = px.pie(
-            df_pabrik_grp,
-            names=col_pabrik,
-            values=col_cukai_ck2,
-            color_discrete_sequence=px.colors.sequential.Blues_r,
-            hole=0.45
-        )
-        fig_pie.update_layout(height=320, margin=dict(t=15, b=15, l=10, r=10))
-        st.plotly_chart(fig_pie, use_container_width=True)
+        
+        if not df_pabrik_grp.empty:
+            fig_pie = px.pie(
+                df_pabrik_grp,
+                names=col_pabrik,
+                values=col_cukai_ck2,
+                color_discrete_sequence=px.colors.sequential.Blues_r,
+                hole=0.45
+            )
+            fig_pie.update_layout(height=320, margin=dict(t=15, b=15, l=10, r=10))
+            st.plotly_chart(fig_pie, use_container_width=True)
+        else:
+            st.info("Belum ada realisasi nilai CK-2 pada filter ini.")
     else:
-        st.info("Visualisasi kontribusi pabrik belum memadai.")
+        st.info("Data belum tersedia untuk grafik kontribusi.")
 
 st.markdown("---")
 
@@ -509,7 +506,7 @@ col_warn1, col_warn2 = st.columns(2)
 col_tempo = "JATUH TEMPO BERAPA HARI LAGI" if "JATUH TEMPO BERAPA HARI LAGI" in df.columns else None
 
 if col_tempo:
-    df_proses = df_filtered[df_filtered['STATUS_CK2_BOOL'] == "PROSES"].copy()
+    df_proses = df[df['STATUS_CK2_BOOL'] == "PROSES"].copy()
     if not df_proses.empty:
         df_proses['SISA_HARI_INT'] = pd.to_numeric(df_proses[col_tempo], errors='coerce')
         overdue_items = df_proses[df_proses['SISA_HARI_INT'] < 0]
@@ -534,68 +531,57 @@ else:
     st.info("Data jatuh tempo (SLA) saat ini belum termuat secara dinamis dalam database.")
 
 # ==============================================================================
-# 11. DETIL DATA TRANSAKSI (LENGKAP DENGAN FORMAT TANDA BACA INDONESIA)
+# 11. DETIL DATA TRANSAKSI (TANGGAL BACK-3 AKTIF & FORMAT INDONESIA)
 # ==============================================================================
 st.markdown("---")
 st.subheader("📑 Detail Data Transaksi (Ter-filter)")
 
-# Siapkan dataframe tampilan tabel
 df_display = df_filtered.copy()
 
-# Format Tanggal Baku DD/MM/YYYY
-if col_tgl_pbck3 in df_display.columns:
-    df_display["TGL_PBCK-3_STR"] = df_display[col_tgl_pbck3].dt.strftime('%d/%m/%Y').fillna("-")
+if not df_display.empty:
+    # Format Tanggal Baku DD/MM/YYYY
+    df_display["TGL_PBCK-3_STR"] = df_display[col_tgl_pbck3].dt.strftime('%d/%m/%Y').fillna("-") if col_tgl_pbck3 in df_display.columns else "-"
+    df_display["TGL_BACK-3_STR"] = df_display[col_tgl_back3].dt.strftime('%d/%m/%Y').fillna("-") if col_tgl_back3 in df_display.columns else "-"
+    df_display["TGL_CK-2_STR"] = df_display[col_tgl_ck2].dt.strftime('%d/%m/%Y').fillna("-") if col_tgl_ck2 in df_display.columns else "-"
+
+    # Format Angka & Rupiah
+    df_display["CUKAI_PENGAJUAN"] = df_display[col_cukai_pbck3].apply(fmt_rupiah)
+    df_display["CUKAI_REALISASI_CK2"] = df_display[col_cukai_ck2].apply(fmt_rupiah)
+    df_display["BIAYA_PENGGANTI_STR"] = df_display[col_biaya_pengganti].apply(fmt_rupiah)
+
+    df_display["BKS_DIAJUKAN"] = df_display[col_bks_pbck3].apply(fmt_bungkus)
+    df_display["BKS_DISETUJUI_MS"] = df_display[col_bks_ck2].apply(fmt_bungkus)
+    df_display["BKS_DITOLAK_TMS"] = df_display['BUNGKUS_TMS'].apply(fmt_bungkus)
+
+    rename_map = {
+        col_pabrik: "Perusahaan",
+        col_pbck3: "No. PBCK-3",
+        "TGL_PBCK-3_STR": "Tgl PBCK-3",
+        "BKS_DIAJUKAN": "Bks Diajukan",
+        "BKS_DISETUJUI_MS": "Bks Disetujui (MS)",
+        "BKS_DITOLAK_TMS": "Bks Ditolak (TMS)",
+        "CUKAI_PENGAJUAN": "Cukai Diajukan (PBCK-3)",
+        "CUKAI_REALISASI_CK2": "Realisasi Cukai (CK-2)",
+        "BIAYA_PENGGANTI_STR": "Biaya Pengganti",
+        col_back3: "No. BACK-3",
+        "TGL_BACK-3_STR": "Tgl BACK-3",
+        col_ck2: "No. CK-2",
+        "TGL_CK-2_STR": "Tgl CK-2"
+    }
+
+    kolom_final = [
+        col_pabrik, col_pbck3, "TGL_PBCK-3_STR", 
+        "BKS_DIAJUKAN", "BKS_DISETUJUI_MS", "BKS_DITOLAK_TMS",
+        "CUKAI_PENGAJUAN", "CUKAI_REALISASI_CK2", "BIAYA_PENGGANTI_STR",
+        col_back3, "TGL_BACK-3_STR", col_ck2, "TGL_CK-2_STR"
+    ]
+
+    df_tabel_rapi = df_display[kolom_final].rename(columns=rename_map)
+
+    st.dataframe(
+        df_tabel_rapi.sort_values(by="Tgl CK-2", ascending=False),
+        use_container_width=True,
+        hide_index=True
+    )
 else:
-    df_display["TGL_PBCK-3_STR"] = "-"
-
-if col_tgl_back3 in df_display.columns:
-    df_display["TGL_BACK-3_STR"] = df_display[col_tgl_back3].dt.strftime('%d/%m/%Y').fillna("-")
-else:
-    df_display["TGL_BACK-3_STR"] = "-"
-
-if col_tgl_ck2 in df_display.columns:
-    df_display["TGL_CK-2_STR"] = df_display[col_tgl_ck2].dt.strftime('%d/%m/%Y').fillna("-")
-else:
-    df_display["TGL_CK-2_STR"] = "-"
-
-# Format Angka & Mata Uang Indonesia
-df_display["CUKAI_PENGAJUAN"] = df_display[col_cukai_pbck3].apply(fmt_rupiah)
-df_display["CUKAI_REALISASI_CK2"] = df_display[col_cukai_ck2].apply(fmt_rupiah)
-df_display["BIAYA_PENGGANTI_STR"] = df_display[col_biaya_pengganti].apply(fmt_rupiah)
-
-df_display["BKS_DIAJUKAN"] = df_display[col_bks_pbck3].apply(fmt_bungkus)
-df_display["BKS_DISETUJUI_MS"] = df_display[col_bks_ck2].apply(fmt_bungkus)
-df_display["BKS_DITOLAK_TMS"] = df_display['BUNGKUS_TMS'].apply(fmt_bungkus)
-
-# Susun Kolom Tampilan yang Enak Dibaca
-rename_map = {
-    col_pabrik: "Perusahaan",
-    col_pbck3: "No. PBCK-3",
-    "TGL_PBCK-3_STR": "Tgl PBCK-3",
-    "BKS_DIAJUKAN": "Bks Diajukan",
-    "BKS_DISETUJUI_MS": "Bks Disetujui (MS)",
-    "BKS_DITOLAK_TMS": "Bks Ditolak (TMS)",
-    "CUKAI_PENGAJUAN": "Cukai Diajukan (PBCK-3)",
-    "CUKAI_REALISASI_CK2": "Realisasi Cukai (CK-2)",
-    "BIAYA_PENGGANTI_STR": "Biaya Pengganti",
-    col_back3: "No. BACK-3",
-    "TGL_BACK-3_STR": "Tgl BACK-3",
-    col_ck2: "No. CK-2",
-    "TGL_CK-2_STR": "Tgl CK-2"
-}
-
-kolom_final = [
-    col_pabrik, col_pbck3, "TGL_PBCK-3_STR", 
-    "BKS_DIAJUKAN", "BKS_DISETUJUI_MS", "BKS_DITOLAK_TMS",
-    "CUKAI_PENGAJUAN", "CUKAI_REALISASI_CK2", "BIAYA_PENGGANTI_STR",
-    col_back3, "TGL_BACK-3_STR", col_ck2, "TGL_CK-2_STR"
-]
-
-df_tabel_rapi = df_display[kolom_final].rename(columns=rename_map)
-
-# Tampilkan Dataframe
-st.dataframe(
-    df_tabel_rapi.sort_values(by="Tgl PBCK-3", ascending=False),
-    use_container_width=True,
-    hide_index=True
-)
+    st.info("Tidak ada berkas yang terbit CK-2 pada periode 
