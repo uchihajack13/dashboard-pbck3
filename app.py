@@ -382,8 +382,8 @@ if not df_display.empty:
                     cols.insert(insert_idx, ck2_col)
                     detail_filtered = detail_filtered[cols]
                     
-                    # Ubah nama header-nya biar rapi
-                    detail_filtered = detail_filtered.rename(columns={ck2_col: "TOTAL NILAI CK-2"})
+                    # Ubah nama header-nya biar rapi sesuai permintaan lu
+                    detail_filtered = detail_filtered.rename(columns={ck2_col: "NILAI CK-2"})
                 
                 # Format angka pakai titik ribuan
                 for col in detail_filtered.columns:
@@ -391,6 +391,14 @@ if not df_display.empty:
                         detail_filtered[col] = detail_filtered[col].apply(
                             lambda x: f"{x:,.0f}".replace(",", ".") if pd.notnull(x) else "0"
                         )
+                
+                # --- MANIPULASI TAMPILAN "MERGE" KOLOM NILAI CK-2 ---
+                if "NILAI CK-2" in detail_filtered.columns and len(detail_filtered) > 1:
+                    # Ambil semua nilai di kolom NILAI CK-2 (sudah dalam bentuk string berformat)
+                    vals = detail_filtered["NILAI CK-2"].tolist()
+                    # Biarkan baris pertama ada isinya, sisanya dikosongkan ("") agar terlihat seperti di-merge
+                    new_vals = [vals[0]] + [""] * (len(vals) - 1)
+                    detail_filtered["NILAI CK-2"] = new_vals
                 
                 st.dataframe(detail_filtered, use_container_width=True, hide_index=True)
             else:
