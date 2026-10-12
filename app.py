@@ -37,7 +37,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ---- FORMATTER BARU (Singkat jadi Triliun/Miliar/Juta) ----
 def fmt_rupiah(val):
     if pd.isna(val) or val == 0: return "Rp 0"
     is_negative = val < 0
@@ -63,7 +62,6 @@ def fmt_bungkus(val):
     else:
         formatted = f"{val:,.0f}".replace(",", ".")
     return f"-{formatted}" if is_negative else formatted
-# -----------------------------------------------------------
 
 LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/1/1a/Logo_Bea_Cukai.png"
 col_logo, col_header = st.columns([1, 8])
@@ -77,7 +75,6 @@ with col_header:
     </p>
     """, unsafe_allow_html=True)
 
-# ---- LOAD DATA BARU (Baca 2 Sheet) ----
 @st.cache_data(ttl=60)
 def load_data():
     sheet_id = "15vLiGh3HzvYPF5Ru_b9ndD2PQKBUrXok"
@@ -103,8 +100,8 @@ try:
 except Exception as e:
     st.error(f"⚠️ Gagal memuat data dari cloud. Error: {e}")
     st.stop()
-# ----------------------------------------
 
+col_agenda = "AGENDA" if "AGENDA" in df.columns else df.columns[0]
 col_pabrik = "PERUSAHAAN" if "PERUSAHAAN" in df.columns else ("PERUSAHAAN_KEP" if "PERUSAHAAN_KEP" in df.columns else df.columns[1])
 col_pbck3 = "NO_PBCK-3" if "NO_PBCK-3" in df.columns else ("NO_PBCK_3" if "NO_PBCK_3" in df.columns else df.columns[0])
 col_tgl_pbck3 = "TANGGAL_PBCK-3" if "TANGGAL_PBCK-3" in df.columns else "TANGGAL_PBCK3"
@@ -137,7 +134,6 @@ else:
 INDO_BULAN = {1: 'Januari', 2: 'Februari', 3: 'Maret', 4: 'April', 5: 'Mei', 6: 'Juni', 7: 'Juli', 8: 'Agustus', 9: 'September', 10: 'Oktober', 11: 'November', 12: 'Desember'}
 df['BULAN_CK2_NAMA'] = df['BULAN_CK2_ANGKA'].map(INDO_BULAN)
 
-# ---- CLEAN NUM BARU (Anti Bug 10x Lipat) ----
 def clean_num(series):
     def parse_value(x):
         if pd.isna(x): return 0
@@ -149,7 +145,6 @@ def clean_num(series):
         except ValueError:
             return 0
     return series.apply(parse_value)
-# ---------------------------------------------
 
 if col_cukai_pbck3 in df.columns: df[col_cukai_pbck3] = clean_num(df[col_cukai_pbck3])
 if col_cukai_ck2 in df.columns: df[col_cukai_ck2] = clean_num(df[col_cukai_ck2])
@@ -265,11 +260,7 @@ with col_chart2:
         df_pabrik_grp = df_pabrik_grp[df_pabrik_grp[col_cukai_ck2] > 0].sort_values(by=col_cukai_ck2, ascending=False).head(5)
         if not df_pabrik_grp.empty:
             fig_pie = px.pie(df_pabrik_grp, names=col_pabrik, values=col_cukai_ck2, color_discrete_sequence=px.colors.sequential.Blues_r, hole=0.45)
-            # ---- FIX HOVER FORMAT RUPIAH PIE CHART ----
-            fig_pie.update_traces(
-                hovertemplate="<b>%{label}</b><br>Nilai Cukai: Rp %{value:,.0f}<br>Porsi: %{percent}<extra></extra>"
-            )
-            # -------------------------------------------
+            fig_pie.update_traces(hovertemplate="<b>%{label}</b><br>Nilai Cukai: Rp %{value:,.0f}<br>Porsi: %{percent}<extra></extra>")
             fig_pie.update_layout(height=320, margin=dict(t=15, b=15, l=10, r=10))
             st.plotly_chart(fig_pie, use_container_width=True)
         else: st.info("Belum ada realisasi nilai CK-2 pada filter ini.")
@@ -303,12 +294,12 @@ else: st.info("Data jatuh tempo (SLA) belum termuat dalam database.")
 st.markdown("---")
 st.subheader("📑 Detail Data Transaksi (Ter-filter)")
 df_display = df_filtered.copy()
+
 if not df_display.empty:
     df_display["TGL_PBCK-3_STR"] = df_display[col_tgl_pbck3].dt.strftime('%d/%m/%Y').fillna("-") if col_tgl_pbck3 in df_display.columns else "-"
     df_display["TGL_BACK-3_STR"] = df_display[col_tgl_back3].dt.strftime('%d/%m/%Y').fillna("-") if col_tgl_back3 in df_display.columns else "-"
     df_display["TGL_CK-2_STR"] = df_display[col_tgl_ck2].dt.strftime('%d/%m/%Y').fillna("-") if col_tgl_ck2 in df_display.columns else "-"
     
-    # Supaya format tabel tetap rapi pakai fungsi separator standar lama (agar gampang dibaca presisi)
     df_display["CUKAI_PENGAJUAN"] = df_display[col_cukai_pbck3].apply(lambda x: f"Rp {x:,.0f}".replace(",", ".") if pd.notnull(x) and x != 0 else "Rp 0")
     df_display["CUKAI_REALISASI_CK2"] = df_display[col_cukai_ck2].apply(lambda x: f"Rp {x:,.0f}".replace(",", ".") if pd.notnull(x) and x != 0 else "Rp 0")
     df_display["BIAYA_PENGGANTI_STR"] = df_display[col_biaya_pengganti].apply(lambda x: f"Rp {x:,.0f}".replace(",", ".") if pd.notnull(x) and x != 0 else "Rp 0")
@@ -316,14 +307,17 @@ if not df_display.empty:
     df_display["BKS_DISETUJUI_MS"] = df_display[col_bks_ck2].apply(lambda x: f"{x:,.0f}".replace(",", ".") if pd.notnull(x) and x != 0 else "0")
     df_display["BKS_DITOLAK_TMS"] = df_display['BUNGKUS_TMS'].apply(lambda x: f"{x:,.0f}".replace(",", ".") if pd.notnull(x) and x != 0 else "0")
 
+    col_agenda_main = "AGENDA" if "AGENDA" in df_display.columns else df_display.columns[0]
+
     rename_map = {
-        col_pabrik: "Perusahaan", col_pbck3: "No. PBCK-3", "TGL_PBCK-3_STR": "Tgl PBCK-3",
+        col_agenda_main: "Agenda", col_pabrik: "Perusahaan", col_pbck3: "No. PBCK-3", "TGL_PBCK-3_STR": "Tgl PBCK-3",
         "BKS_DIAJUKAN": "Bks Diajukan", "BKS_DISETUJUI_MS": "Bks Disetujui (MS)", "BKS_DITOLAK_TMS": "Bks Ditolak (TMS)",
         "CUKAI_PENGAJUAN": "Cukai Diajukan (PBCK-3)", "CUKAI_REALISASI_CK2": "Realisasi Cukai (CK-2)", "BIAYA_PENGGANTI_STR": "Biaya Pengganti",
         col_back3: "No. BACK-3", "TGL_BACK-3_STR": "Tgl BACK-3", col_ck2: "No. CK-2", "TGL_CK-2_STR": "Tgl CK-2"
     }
+    
     kolom_final = [
-        col_pabrik, col_pbck3, "TGL_PBCK-3_STR", 
+        col_agenda_main, col_pabrik, col_pbck3, "TGL_PBCK-3_STR", 
         "BKS_DIAJUKAN", "BKS_DISETUJUI_MS", "BKS_DITOLAK_TMS",
         "CUKAI_PENGAJUAN", "CUKAI_REALISASI_CK2", "BIAYA_PENGGANTI_STR",
         col_back3, "TGL_BACK-3_STR", col_ck2, "TGL_CK-2_STR"
@@ -331,34 +325,34 @@ if not df_display.empty:
     df_tabel_rapi = df_display[kolom_final].rename(columns=rename_map)
     df_tabel_rapi = df_tabel_rapi.sort_values(by="Tgl PBCK-3", ascending=False).reset_index(drop=True)
     
-    # ---- FITUR KLIK BARIS MUNCULKAN TABEL DETAIL ----
     tabel_event = st.dataframe(
         df_tabel_rapi, 
         use_container_width=True, 
         hide_index=True,
         on_select="rerun",           
-        selection_mode="single-row"  # <-- Ubah garis bawah (_) menjadi strip (-)
+        selection_mode="single-row"  
     )
 
     selected_rows = tabel_event.selection.rows
     if selected_rows:
         idx = selected_rows[0]
+        selected_agenda = df_tabel_rapi.iloc[idx]["Agenda"]
         selected_pbck3 = df_tabel_rapi.iloc[idx]["No. PBCK-3"]
         
-        st.markdown(f"### 🔍 Rincian Item untuk Dokumen: `{selected_pbck3}`")
+        st.markdown(f"### 🔍 Rincian Item untuk Dokumen: `{selected_pbck3}` (Agenda: {selected_agenda})")
         
         if not df_detail.empty:
-            col_dtl_pbck3 = "NO_PBCK-3" if "NO_PBCK-3" in df_detail.columns else ("NO_PBCK_3" if "NO_PBCK_3" in df_detail.columns else df_detail.columns[0])
-            detail_filtered = df_detail[df_detail[col_dtl_pbck3] == selected_pbck3]
+            col_dtl_agenda = "AGENDA" if "AGENDA" in df_detail.columns else df_detail.columns[0]
+            detail_filtered = df_detail[df_detail[col_dtl_agenda].astype(str) == str(selected_agenda)]
             
             if not detail_filtered.empty:
                 st.dataframe(detail_filtered, use_container_width=True, hide_index=True)
             else:
-                st.info(f"Tidak ada data rincian tambahan di sheet 'Detail' untuk {selected_pbck3}.")
+                st.info(f"Tidak ada rincian tambahan di sheet 'Detail' untuk Agenda {selected_agenda}.")
         else:
-            st.warning("Sheet bernama 'Detail' tidak ditemukan di database Google Drive.")
+            st.warning("Sheet bernama 'Detail' tidak ditemukan di database.")
     else:
         st.caption("💡 *Klik pada salah satu baris di tabel atas untuk memunculkan rincian item (Sheet Detail).*")
-    # --------------------------------------------------
+
 else:
     st.info("Tidak ada berkas yang terbit CK-2 pada periode / filter yang dipilih.")
