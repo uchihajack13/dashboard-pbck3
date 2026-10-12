@@ -339,42 +339,20 @@ if not df_display.empty:
         selected_agenda = df_tabel_rapi.iloc[idx]["Agenda"]
         selected_pbck3 = df_tabel_rapi.iloc[idx]["No. PBCK-3"]
         
-      st.markdown(f"### 🔍 Rincian Item untuk Dokumen: `{selected_pbck3}` (Agenda: {selected_agenda})")
+        st.markdown(f"### 🔍 Rincian Item untuk Dokumen: `{selected_pbck3}` (Agenda: {selected_agenda})")
         
         if not df_detail.empty:
             col_dtl_agenda = "AGENDA" if "AGENDA" in df_detail.columns else df_detail.columns[0]
-            # Pakai .copy() biar aman saat datanya dimodifikasi
             detail_filtered = df_detail[df_detail[col_dtl_agenda].astype(str) == str(selected_agenda)].copy()
             
             if not detail_filtered.empty:
-                
-                # --- FIX 1: Hapus kolom "hantu" dan kolom Total Dokumen (Merge) ---
-                # Daftar nama kolom yang mau kita sembunyikan dari rincian
-                kolom_dibuang = [
-                    "NILAI CK-2", 
-                    "TOTAL CUKAI PEMBERITAHUAN", 
-                    "TOTAL CUKAI MS", 
-                    "NO", 
-                    "MOR", 
-                    "↑ MOR"
-                ]
-                
-                cols_to_keep = [
-                    c for c in detail_filtered.columns 
-                    # Buang kolom UNNAMED dan kolom-kolom total di atas
-                    if not str(c).strip().upper().startswith("UNNAMED") 
-                    and str(c).strip().upper() not in kolom_dibuang
-                ]
-                
-                # Terapkan filter kolom
+                kolom_dibuang = ["NILAI CK-2", "TOTAL CUKAI PEMBERITAHUAN", "TOTAL CUKAI MS", "NO", "MOR", "↑ MOR"]
+                cols_to_keep = [c for c in detail_filtered.columns if not str(c).strip().upper().startswith("UNNAMED") and str(c).strip().upper() not in kolom_dibuang]
                 detail_filtered = detail_filtered[cols_to_keep]
                 
-                # --- FIX 2: Format otomatis semua kolom angka pakai titik ribuan ---
                 for col in detail_filtered.columns:
                     if pd.api.types.is_numeric_dtype(detail_filtered[col]):
-                        detail_filtered[col] = detail_filtered[col].apply(
-                            lambda x: f"{x:,.0f}".replace(",", ".") if pd.notnull(x) else "0"
-                        )
+                        detail_filtered[col] = detail_filtered[col].apply(lambda x: f"{x:,.0f}".replace(",", ".") if pd.notnull(x) else "0")
                 
                 st.dataframe(detail_filtered, use_container_width=True, hide_index=True)
             else:
