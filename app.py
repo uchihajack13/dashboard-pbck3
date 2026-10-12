@@ -2,336 +2,327 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import io
+from datetime import datetime
 
-# ==============================================================================
-# 1. KONFIGURASI HALAMAN
-# ==============================================================================
+# 1. KONFIGURASI HALAMAN & TEMA EKSEKUTIF
 st.set_page_config(
-    page_title="Dashboard PBCK-3 | KPPBC TMC Malang",
-    page_icon="🏛️",
+    page_title="Dashboard PBCK-3 KPPBC TMC Malang",
+    page_icon="🪙",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom Styling CSS (Modern Executive Theme)
+# Custom CSS warna instansi (Navy Blue, Gold, and Clean Card Style)
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-    html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif;
+    .main { background-color: #f8f9fa; }
+    div[data-testid="metric-container"] {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        padding: 15px;
+        border-radius: 10px;
+        box-shadow: 2px 2px 8px rgba(0,0,0,0.05);
     }
-    .metric-card {
-        background: linear-gradient(135deg, #1E3989 0%, #0F2042 100%);
-        color: white;
+    div[data-testid="metric-container"] label {
+        color: #1e3a8a !important; /* Navy */
+        font-weight: bold;
+        font-size: 13px !important;
+    }
+    .main-header {
+        background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%);
         padding: 20px;
         border-radius: 12px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        text-align: center;
-        margin-bottom: 10px;
+        color: white;
+        margin-bottom: 25px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
-    .metric-label {
-        font-size: 13px;
-        text-transform: uppercase;
-        letter-spacing: 0.8px;
-        color: #CBD5E1;
-        margin-bottom: 5px;
-    }
-    .metric-value {
-        font-size: 22px;
-        font-weight: 700;
-        color: #F8FAFC;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 45px;
-        white-space: pre-wrap;
-        background-color: #F1F5F9;
-        border-radius: 8px 8px 0px 0px;
-        padding: 10px 20px;
-        font-weight: 600;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #1E3989 !important;
-        color: white !important;
-    }
+    .custom-title { font-family: 'Montserrat', sans-serif; font-weight: 800; margin: 0; font-size: 28px; }
+    .custom-subtitle { font-size: 13px; opacity: 0.8; margin: 0; }
     </style>
 """, unsafe_allow_html=True)
 
-# ==============================================================================
-# 2. PENGAMBILAN & PEMBERSIHAN DATA DARI GOOGLE DRIVE
-# ==============================================================================
-FILE_ID = "15vLiGh3HzvYPF5Ru_b9ndD2PQKBUrXok"
-URL_DOWNLOAD = f"https://drive.google.com/uc?export=download&id={FILE_ID}"
+# 2. HEADER & LOGO RESMI KPPBC
+LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/1/1a/Logo_Bea_Cukai.png"
 
-@st.cache_data(ttl=60)
+col_logo, col_header = st.columns([1, 8])
+with col_logo:
+    st.image(LOGO_URL, width=80)
+with col_header:
+    st.markdown("""
+        <div class="main-header">
+            <h2 class="custom-title">📊 DASHBOARD PBCK-3 & REALISASI CUKAI</h2>
+            <p class="custom-subtitle">Monitoring Pengolahan Kembali & Pemusnahan BKC — KPPBC TMC Malang</p>
+            <p style="font-size: 11px; opacity: 0.6; margin-top: 5px;">Terintegrasi dengan PMK 113/2025 & PER-2/BC/2026</p>
+        </div>
+    """, unsafe_allow_html=True)
+
+# 3. KONEKSI & LOAD DATA DARI CLOUD DRIVE
+@st.cache_data(ttl=300)  # Cache 5 menit biar real-time dan hemat kuota
 def load_data():
-    try:
-        df = pd.read_excel(URL_DOWNLOAD, sheet_name="DATABASE MERGE")
-        
-        # 1. Bersihkan spasi tak terlihat di semua nama kolom
-        df.columns = df.columns.str.strip()
-        
-        # 2. Konversi kolom numerik penting secara aman (buang string/karakter non-angka)
-        numeric_cols = ["CUKAI_MS", "TOTAL_CUKAI", "JUMLAH_BP", "TOTAL_BUNGKUS_MS", "TOTAL_BUNGKUS"]
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(
-                    df[col].astype(str).str.replace("Rp", "", regex=False).str.replace(".", "", regex=False).str.replace(",", ".", regex=False).str.strip(),
-                    errors="coerce"
-                ).fillna(0)
-        
-        # 3. Format Tanggal
-        if "TGL_CK-2" in df.columns:
-            df["TGL_CK-2_DT"] = pd.to_datetime(df["TGL_CK-2"], errors="coerce")
-            df["BULAN_NUM"] = df["TGL_CK-2_DT"].dt.month
-        else:
-            df["BULAN_NUM"] = None
-            
-        return df
-    except Exception as e:
-        st.error(f"Gagal memuat data dari cloud: {e}")
-        return pd.DataFrame()
+    sheet_id = "15vLiGh3HzvYPF5Ru_b9ndD2PQKBUrXok"
+    url_merge = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
+    df = pd.read_excel(url_merge, sheet_name="DATABASE MERGE")
+    
+    # ⚠️ Kunci Utama: Standardisasi Kolom (Huruf Besar & Tanpa Spasi)
+    df.columns = df.columns.str.strip().str.upper()
+    return df
 
-df_raw = load_data()
-
-if df_raw.empty:
-    st.warning("⚠️ Tidak ada data yang dapat ditampilkan. Pastikan link Google Drive sudah diatur ke 'Anyone with the link can view'.")
+try:
+    df_raw = load_data()
+    df = df_raw.copy()
+except Exception as e:
+    st.error(f"⚠️ Gagal memuat data dari G-Drive, bro. Error: {e}")
     st.stop()
 
-# ==============================================================================
-# 3. SIDEBAR FILTER INTERAKTIF
-# ==============================================================================
-with st.sidebar:
-    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/c/cf/Logo_Bea_Cukai.png/300px-Logo_Bea_Cukai.png", width=110)
-    st.title("Panel Kontrol")
-    st.markdown("Filter pengawasan pengembalian cukai KPPBC TMC Malang.")
-    st.markdown("---")
+# 4. RESOLVING GHOST COLUMNS (MENCEGAH KEYERROR)
+# Membantu menyamakan kolom-kolom kritis seumpama ada pergantian nama di Drive Desktop
+col_pabrik = "PERUSAHAAN" if "PERUSAHAAN" in df.columns else ("PERUSAHAAN_KEP" if "PERUSAHAAN_KEP" in df.columns else df.columns[1])
+col_pbck3 = "NO_PBCK-3" if "NO_PBCK-3" in df.columns else ("NO_PBCK_3" if "NO_PBCK_3" in df.columns else df.columns[0])
+col_tgl_pbck3 = "TANGGAL_PBCK-3" if "TANGGAL_PBCK-3" in df.columns else "TANGGAL_PBCK3"
+col_back3 = "BACK-3" if "BACK-3" in df.columns else df.columns[0]
+col_tgl_back3 = "TANGGAL BACK-3" if "TANGGAL BACK-3" in df.columns else "TANGGAL_BACK-3"
+col_ck2 = "NO_CK-2" if "NO_CK-2" in df.columns else "NO_CK2"
+col_tgl_ck2 = "TGL_CK-2" if "TGL_CK-2" in df.columns else "TGL_CK_2"
+col_potensi_cukai = "TOTAL_CUKAI" if "TOTAL_CUKAI" in df.columns else "TOTAL CUKAI"
+col_biaya_pengganti = "JUMLAH_BP" if "JUMLAH_BP" in df.columns else "JUMLAH BP"
+
+# Format Tanggal PBCK-3
+if col_tgl_pbck3 in df.columns:
+    df[col_tgl_pbck3] = pd.to_datetime(df[col_tgl_pbck3], errors='coerce')
+if col_tgl_back3 in df.columns:
+    df[col_tgl_back3] = pd.to_datetime(df[col_tgl_back3], errors='coerce')
+if col_tgl_ck2 in df.columns:
+    df[col_tgl_ck2] = pd.to_datetime(df[col_tgl_ck2], errors='coerce')
+
+# Ekstrak Info Tahun & Bulan berdasarkan data TANGGAL_PBCK-3
+df['TAHUN_PBCK'] = df[col_tgl_pbck3].dt.year.fillna(2026).astype(int)
+df['BULAN_ANGKA'] = df[col_tgl_pbck3].dt.month.fillna(1).astype(int)
+
+INDO_BULAN = {
+    1: 'Januari', 2: 'Februari', 3: 'Maret', 4: 'April', 5: 'Mei', 6: 'Juni',
+    7: 'Juli', 8: 'Agustus', 9: 'September', 10: 'Oktober', 11: 'November', 12: 'Desember'
+}
+df['BULAN_NAMA'] = df['BULAN_ANGKA'].map(INDO_BULAN)
+
+# 5. INTEGRASI FILTER PERIODE & PABRIK (DI SIDEBAR)
+st.sidebar.markdown("### 🎛️ Filter Dasbor")
+
+# Filter A: Perusahaan Pabrik
+pabrik_list = ["Semua Pabrik"] + sorted(df[col_pabrik].dropna().unique().tolist())
+selected_pabrik = st.sidebar.selectbox("Pilih Pabrik / Perusahaan:", pabrik_list)
+
+# Filter B: Tahun
+tahun_list = sorted(df['TAHUN_PBCK'].unique().tolist(), reverse=True)
+selected_tahun = st.sidebar.selectbox("Pilih Tahun:", tahun_list)
+
+# 🚀 FITUR MEWAH: FILTER PERIODE BULAN (Sesuai Kebutuhan Pimpinan)
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🗓️ Filter Periode Bulanan")
+mode_periode = st.sidebar.radio(
+    "Mode Periode:",
+    ["Semua Periode", "Bulanan Tunggal (Single Month)", "Kumulatif (s.d. Bulan)"],
+    help="Sangat penting untuk laporan audit, bisa melihat realisasi satu bulan tertentu atau perkembangan s.d. bulan berjalan!"
+)
+
+# Render Dropdown Bulan kalau user memilih metode bulan spesifik
+selected_bulan_nama = "Januari"
+selected_bulan_angka = 1
+if mode_periode != "Semua Periode":
+    # Pastikan list bulan berdasarkan kronologis, bukan abjad
+    nama_bulan_list = [INDO_BULAN[i] for i in sorted(df[df['TAHUN_PBCK'] == selected_tahun]['BULAN_ANGKA'].unique())]
+    if not nama_bulan_list:
+        nama_bulan_list = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember']
     
-    # Filter Pabrik
-    daftar_pabrik = ["SEMUA PABRIK (SEMUA PENGAJUAN)"] + sorted(df_raw["PERUSAHAAN"].dropna().unique().tolist())
-    pabrik_terpilih = st.selectbox("🏭 Pilih Perusahaan / Pabrik:", daftar_pabrik)
-    
-    # Filter Periode CK-2
-    opsi_bulan = [
-        "SEMUA BULAN (TOTAL TAHUNAN)",
-        "Januari", "Februari", "Maret", "April", "Mei", "Juni",
-        "Juli", "Agustus", "September", "Oktober", "November", "Desember",
-        "s.d. Januari", "s.d. Februari", "s.d. Maret", "s.d. April", "s.d. Mei", "s.d. Juni",
-        "s.d. Juli", "s.d. Agustus", "s.d. September", "s.d. Oktober", "s.d. November", "s.d. Desember"
-    ]
-    bulan_terpilih = st.selectbox("📅 Pilih Periode Terbit CK-2:", opsi_bulan)
-    
-    nama_bulan_dict = {
-        "Januari": 1, "Februari": 2, "Maret": 3, "April": 4, "Mei": 5, "Juni": 6,
-        "Juli": 7, "Agustus": 8, "September": 9, "Oktober": 10, "November": 11, "Desember": 12
-    }
-    
-    # Tombol Refresh Cache Data
-    if st.button("🔄 Refresh Data Cloud"):
-        st.cache_data.clear()
-        st.rerun()
+    selected_bulan_nama = st.sidebar.selectbox("Pilih Bulan Acuan:", nama_bulan_list)
+    # Convert nama bulan terpilih ke angka (1-12)
+    selected_bulan_angka = next(k for k, v in INDO_BULAN.items() if v == selected_bulan_nama)
 
-# ==============================================================================
-# 4. LOGIKA FILTERING DATA
-# ==============================================================================
-df_filtered = df_raw.copy()
+# 6. PENGEKSEKUSIAN LOGIKA FILTER DATA
+df_filtered = df.copy()
 
-# Filter Nama Pabrik
-if pabrik_terpilih != "SEMUA PABRIK (SEMUA PENGAJUAN)":
-    df_filtered = df_filtered[df_filtered["PERUSAHAAN"] == pabrik_terpilih]
+# Filter Perusahaan
+if selected_pabrik != "Semua Pabrik":
+    df_filtered = df_filtered[df_filtered[col_pabrik] == selected_pabrik]
 
-# Filter Bulan
-if bulan_terpilih != "SEMUA BULAN (TOTAL TAHUNAN)":
-    if bulan_terpilih.startswith("s.d. "):
-        target_nama = bulan_terpilih.replace("s.d. ", "")
-        target_num = nama_bulan_dict.get(target_nama, 12)
-        df_filtered = df_filtered[df_filtered["BULAN_NUM"] <= target_num]
-    else:
-        target_num = nama_bulan_dict.get(bulan_terpilih, 0)
-        df_filtered = df_filtered[df_filtered["BULAN_NUM"] == target_num]
+# Filter Tahun
+df_filtered = df_filtered[df_filtered['TAHUN_PBCK'] == selected_tahun]
 
-# ==============================================================================
-# 5. HEADER UTAMA & PROFIL
-# ==============================================================================
-st.markdown("## 📊 EXECUTIVE DASHBOARD PENGAWASAN PBCK-3")
-st.markdown(f"**Wilayah Pengawasan:** KPPBC Tipe Madya Cukai Malang | **Tahun Anggaran:** 2026")
+# Filter Periode Bulan (Logika Tunggal vs Kumulatif)
+if mode_periode == "Bulanan Tunggal (Single Month)":
+    df_filtered = df_filtered[df_filtered['BULAN_ANGKA'] == selected_bulan_angka]
+elif mode_periode == "Kumulatif (s.d. Bulan)":
+    df_filtered = df_filtered[df_filtered['BULAN_ANGKA'] <= selected_bulan_angka]
 
-if pabrik_terpilih != "SEMUA PABRIK (SEMUA PENGAJUAN)":
-    npp = df_filtered["NPPBKC 10 DIGIT"].iloc[0] if "NPPBKC 10 DIGIT" in df_filtered.columns else "-"
-    alamat = df_filtered["ALAMAT"].iloc[0] if "ALAMAT" in df_filtered.columns else "-"
-    st.info(f"🏢 **{pabrik_terpilih}** | **NPPBKC:** `{npp}` | **Alamat:** {alamat}")
+# 7. PEMROSESAN ANGGOTA & METRIK EKSEKUTIF
+total_pbck3 = df_filtered[col_pbck3].nunique() if col_pbck3 in df_filtered.columns else len(df_filtered)
+
+# Jumlah CK-2 yang Telah Terbit (No CK-2 valid/tidak kosong)
+if col_ck2 in df_filtered.columns:
+    df_filtered['STATUS_CK2_BOOL'] = df_filtered[col_ck2].apply(
+        lambda x: "TERBIT" if pd.notnull(x) and str(x).strip() != "" and str(x).strip().lower() != "nan" and str(x).strip() != "-" else "PROSES"
+    )
+    total_ck2 = df_filtered[df_filtered['STATUS_CK2_BOOL'] == "TERBIT"][col_ck2].nunique()
 else:
-    st.caption(f"Menampilkan agregasi total seluruh pengajuan pabrik di wilayah pengawasan. Periode: **{bulan_terpilih}**")
+    df_filtered['STATUS_CK2_BOOL'] = "PROSES"
+    total_ck2 = 0
 
-# ==============================================================================
-# 6. KARTU METRIK KPI UTAMA
-# ==============================================================================
-total_pengajuan = len(df_filtered)
-total_cukai_ms = df_filtered["CUKAI_MS"].sum() if "CUKAI_MS" in df_filtered.columns else 0
-total_bp = df_filtered["JUMLAH_BP"].sum() if "JUMLAH_BP" in df_filtered.columns else 0
-total_bungkus_ms = df_filtered["TOTAL_BUNGKUS_MS"].sum() if "TOTAL_BUNGKUS_MS" in df_filtered.columns else 0
+# Outstanding Pekerjaan (Masuk tapi belum terbit CK-2)
+total_outstanding = total_pbck3 - total_ck2
 
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Total Pengajuan PBCK-3</div>
-            <div class="metric-value">{total_pengajuan:,} Berkas</div>
-        </div>
-    """, unsafe_allow_html=True)
-with c2:
-    st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Total Nilai Cukai MS</div>
-            <div class="metric-value">Rp {total_cukai_ms:,.0f}</div>
-        </div>
-    """, unsafe_allow_html=True)
-with c3:
-    st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Total Biaya Pengganti (BP)</div>
-            <div class="metric-value">Rp {total_bp:,.0f}</div>
-        </div>
-    """, unsafe_allow_html=True)
-with c4:
-    st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Total Kemasan / Bungkus MS</div>
-            <div class="metric-value">{total_bungkus_ms:,.0f} Bks</div>
-        </div>
-    """, unsafe_allow_html=True)
+# Potensi Finansial (Sesuai PMK 113/2025)
+nilai_cukai = pd.to_numeric(df_filtered[col_potensi_cukai], errors='coerce').sum() if col_potensi_cukai in df_filtered.columns else 0
+biaya_pengganti = pd.to_numeric(df_filtered[col_biaya_pengganti], errors='coerce').sum() if col_biaya_pengganti in df_filtered.columns else 0
 
-st.markdown("<br>", unsafe_allow_html=True)
+# Tampilkan Label Filter Aktif di Atas Dashboard
+visual_periode_lbl = "Semua Periode Tahun " + str(selected_tahun)
+if mode_periode == "Bulanan Tunggal (Single Month)":
+    visual_periode_lbl = f"Bulan {selected_bulan_nama} {selected_tahun}"
+elif mode_periode == "Kumulatif (s.d. Bulan)":
+    visual_periode_lbl = f"Januari s.d. {selected_bulan_nama} {selected_tahun}"
 
-# ==============================================================================
-# 7. TAB KONTEN INTERAKTIF
-# ==============================================================================
-tab_visual, tab_tabel, tab_alert = st.tabs([
-    "📈 Analisis Visual & Grafik", 
-    "📑 Daftar Riwayat Dokumen", 
-    "🚨 Monitoring Jatuh Tempo CK-2"
-])
+st.markdown(f"🚩 **Periode Terpantau saat ini:** `{visual_periode_lbl}`  |  🏢 **Perusahaan Pabrik:** `{selected_pabrik}`")
 
-# ------------------------------------------------------------------------------
-# TAB 1: VISUALISASI
-# ------------------------------------------------------------------------------
-with tab_visual:
-    g1, g2 = st.columns(2)
+# 8. PANEL UTAMA TAMPILAN COUNTER / METRIKS
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.metric(
+        label="📥 TOTAL PBCK-3 (PERMOHONAN)",
+        value=f"{total_pbck3} Berkas",
+        help="Semua pengajuan permohonan pemusnahan / olah kembali."
+    )
+with col2:
+    st.metric(
+        label="📜 CK-2 SELESAI TERBIT",
+        value=f"{total_ck2} Dokumen",
+        delta=f"{total_ck2/total_pbck3*100:.1f}% dari permohonan" if total_pbck3 > 0 else "0%",
+        delta_color="normal",
+        help="Dokumen tanda perusakan pita cukai yang resmi rampung."
+    )
+with col3:
+    st.metric(
+        label="⏳ OUTSTANDING (BELUM SELESAI)",
+        value=f"{total_outstanding} Dokumen",
+        delta=f"{(total_outstanding/total_pbck3)*100:.1f}% Sisa Pekerjaan" if total_pbck3 > 0 else "0%",
+        delta_color="inverse",
+        help="Dokumen yang belum diterbitkan CK-2 nya."
+    )
+
+col_fin1, col_fin2 = st.columns(2)
+with col_fin1:
+    st.metric(label="💸 TOTAL PENGEMBALIAN CUKAI (PMK 113/2025)", value=f"Rp {nilai_cukai:,.0f}")
+with col_fin2:
+    st.metric(label="🏦 TOTAL BIAYA PENGGANTI (PENERIMAAN NEGARA)", value=f"Rp {biaya_pengganti:,.0f}")
+
+st.markdown("---")
+
+# 9. INTEGRASI DIAGRAM & ANALISIS TREN BULANAN (Visual Favorit Pimpinan)
+col_chart1, col_chart2 = st.columns([6, 5])
+
+with col_chart1:
+    st.subheader("📈 Tren Kinerja Bulanan")
+    st.caption("Visualisasi permohonan yang masuk (Inflow) dibanding CK-2 yang terbit (Outflow).")
     
-    with g1:
-        st.subheader("🍩 Skema Pelaksanaan (PER-2/BC/2026)")
-        if "SKEMA_PELAKSANAAN" in df_filtered.columns and not df_filtered["SKEMA_PELAKSANAAN"].dropna().empty:
-            df_skema = df_filtered["SKEMA_PELAKSANAAN"].value_counts().reset_index()
-            df_skema.columns = ["Skema", "Jumlah"]
-            fig_skema = px.pie(
-                df_skema, names="Skema", values="Jumlah", hole=0.45,
-                color_discrete_sequence=["#1E3989", "#D97706", "#2563EB", "#DC2626"]
-            )
-            fig_skema.update_traces(textposition='inside', textinfo='percent+label')
-            fig_skema.update_layout(margin=dict(t=20, b=20, l=10, r=10), showlegend=False)
-            st.plotly_chart(fig_skema, use_container_width=True)
-        else:
-            st.info("Data skema pelaksanaan belum tersedia.")
+    # Tren Kumulatif / Bulanan dari Tanggal Permohonan
+    df_trend_monthly = df_filtered.groupby('BULAN_ANGKA').agg(
+        PBCK3=(col_pbck3, 'count') if col_pbck3 in df_filtered.columns else ('BULAN_ANGKA', 'count'),
+        CK2=('STATUS_CK2_BOOL', lambda x: (x == "TERBIT").sum())
+    ).reset_index()
+    
+    # Map angka bulan ke nama bulan singkat
+    df_trend_monthly['BULAN'] = df_trend_monthly['BULAN_ANGKA'].map(INDO_BULAN)
+    
+    fig_trend = go.Figure()
+    # Bar Chart: PBCK-3 (Masuk)
+    fig_trend.add_trace(go.Bar(
+        x=df_trend_monthly['BULAN'], y=df_trend_monthly['PBCK3'],
+        name='Dokumen PBCK-3 Masuk', marker_color='#1e3a8a', opacity=0.85
+    ))
+    # Line Chart: CK-2 (Terbit)
+    fig_trend.add_trace(go.Scatter(
+        x=df_trend_monthly['BULAN'], y=df_trend_monthly['CK2'],
+        name='Dokumen CK-2 Terbit', marker_color='#fbbf24', mode='lines+markers',
+        line=dict(width=4)
+    ))
+    
+    fig_trend.update_layout(
+        barmode='group',
+        xaxis_title="Periode Bulan",
+        yaxis_title="Volume Dokumen",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        height=320,
+        margin=dict(t=15, b=15, l=10, r=10)
+    )
+    st.plotly_chart(fig_trend, use_container_width=True)
 
-    with g2:
-        st.subheader("📦 Kategori Asal BKC")
-        if "ASAL" in df_filtered.columns and not df_filtered["ASAL"].dropna().empty:
-            df_asal = df_filtered.groupby("ASAL")["CUKAI_MS"].sum().reset_index()
-            fig_asal = px.bar(
-                df_asal, x="ASAL", y="CUKAI_MS", text_auto=".2s",
-                color="ASAL", color_discrete_sequence=["#0D9488", "#3B82F6", "#F59E0B"]
-            )
-            fig_asal.update_layout(
-                yaxis_title="Nilai Cukai MS (Rp)", xaxis_title="",
-                margin=dict(t=20, b=20, l=10, r=10), showlegend=False
-            )
-            st.plotly_chart(fig_asal, use_container_width=True)
-        else:
-            st.info("Data kategori asal belum tersedia.")
-
-    # Top 5 Pabrik dengan Pengembalian Cukai Terbesar
-    if pabrik_terpilih == "SEMUA PABRIK (SEMUA PENGAJUAN)":
-        st.subheader("🏆 Top 7 Perusahaan Berdasarkan Nilai Cukai MS")
-        top_pabrik = df_filtered.groupby("PERUSAHAAN")["CUKAI_MS"].sum().reset_index()
-        top_pabrik = top_pabrik.sort_values(by="CUKAI_MS", ascending=True).tail(7)
-        fig_top = px.bar(
-            top_pabrik, x="CUKAI_MS", y="PERUSAHAAN", orientation="h",
-            color="CUKAI_MS", color_continuous_scale="Blues", text_auto=".3s"
+with col_chart2:
+    st.subheader("📊 Pembagian Kontribusi Nilai Cukai")
+    st.caption("Visualisasi permohonan ter-filter per-perusahaan pabrik.")
+    
+    if col_pabrik in df_filtered.columns:
+        df_pabrik_grp = df_filtered.groupby(col_pabrik)[col_potensi_cukai].sum().reset_index()
+        df_pabrik_grp = df_pabrik_grp.sort_values(by=col_potensi_cukai, ascending=False).head(5)
+        
+        fig_pie = px.pie(
+            df_pabrik_grp,
+            names=col_pabrik,
+            values=col_potensi_cukai,
+            color_discrete_sequence=px.colors.sequential.Blues_r,
+            hole=0.4
         )
-        fig_top.update_layout(xaxis_title="Nilai Cukai (Rp)", yaxis_title="", margin=dict(t=10, b=10, l=10, r=10))
-        st.plotly_chart(fig_top, use_container_width=True)
-
-# ------------------------------------------------------------------------------
-# TAB 2: TABEL RIWAYAT DOKUMEN & SEARCH
-# ------------------------------------------------------------------------------
-with tab_tabel:
-    st.subheader("Daftar Riwayat Pemeriksaan & Pengembalian Cukai")
-    
-    # Kolom Pencarian Cepat
-    search_keyword = st.text_input("🔍 Cari nomor agenda, nomor surat, atau kata kunci lain:", "")
-    
-    kolom_tampil = [
-        "AGENDA", "PERUSAHAAN", "NO_PBCK-3", "TANGGAL_PBCK-3", 
-        "SKEMA_PELAKSANAAN", "TOTAL_BUNGKUS_MS", "CUKAI_MS", "JUMLAH_BP", 
-        "BACK-3", "NO_CK-2", "PETUGAS_1", "PETUGAS 2"
-    ]
-    kolom_ada = [c for c in kolom_tampil if c in df_filtered.columns]
-    df_tabel = df_filtered[kolom_ada].copy()
-    
-    if search_keyword:
-        mask = df_tabel.astype(str).apply(lambda row: row.str.contains(search_keyword, case=False).any(), axis=1)
-        df_tabel = df_tabel[mask]
-
-    # Format Tampilan Mata Uang & Angka pada Dataframe
-    st.dataframe(
-        df_tabel.style.format({
-            "CUKAI_MS": "Rp {:,.0f}",
-            "JUMLAH_BP": "Rp {:,.0f}",
-            "TOTAL_BUNGKUS_MS": "{:,.0f}"
-        }),
-        use_container_width=True,
-        height=450
-    )
-    
-    # Tombol Download Data Filter
-    csv_data = df_tabel.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Download Data Ini ke File CSV",
-        data=csv_data,
-        file_name="rekap_pbck3_filtered.csv",
-        mime="text/csv"
-    )
-
-# ------------------------------------------------------------------------------
-# TAB 3: MONITORING JATUH TEMPO (10 HARI KERJA)
-# ------------------------------------------------------------------------------
-with tab_alert:
-    st.subheader("🚨 Status Jatuh Tempo Penerbitan CK-2")
-    st.caption("Batas maksimal penerbitan CK-2 adalah 10 hari kerja setelah tanggal Berita Acara (BACK-3) diterbitkan (Pasal 7 PER-2/BC/2026).")
-    
-    kolom_jt = ["AGENDA", "PERUSAHAAN", "TANGGAL_BACK-3", "BATAS MAKSIMAL CK-2", "JATUH TEMPO BERAPA HARI LAGI", "NO_CK-2"]
-    kolom_jt_ada = [c for c in kolom_jt if c in df_filtered.columns]
-    
-    if kolom_jt_ada:
-        df_jt = df_filtered[kolom_jt_ada].copy()
-        
-        # Pisahkan berkas yang belum terbit CK-2
-        belum_ck2 = df_jt[df_jt["NO_CK-2"].isna() | (df_jt["NO_CK-2"] == "") | (df_jt["NO_CK-2"] == "-")]
-        sudah_ck2 = df_jt[~(df_jt["NO_CK-2"].isna() | (df_jt["NO_CK-2"] == "") | (df_jt["NO_CK-2"] == "-"))]
-        
-        col_jt1, col_jt2 = st.columns([1, 1])
-        with col_jt1:
-            st.metric("Berkas Belum Terbit CK-2", f"{len(belum_ck2)} Berkas")
-        with col_jt2:
-            st.metric("Berkas Selesai CK-2", f"{len(sudah_ck2)} Berkas")
-            
-        st.markdown("#### ⏳ Berkas yang Sedang Berjalan / Menunggu CK-2:")
-        if not belum_ck2.empty:
-            st.dataframe(belum_ck2, use_container_width=True)
-        else:
-            st.success("✅ Semua dokumen pada filter ini telah selesai terbit CK-2!")
+        fig_pie.update_layout(height=320, margin=dict(t=15, b=15, l=10, r=10))
+        st.plotly_chart(fig_pie, use_container_width=True)
     else:
-        st.info("Kolom jatuh tempo tidak ditemukan pada database.")
+        st.info("Visualisasi data Perusahaan Pabrik tidak memadai.")
+
+st.markdown("---")
+
+# 10. NOTIFIKASI SLA (MEGATRON / COMPLIANCE WARNING)
+st.subheader("🚨 Warning Kepatuhan SLA (Maks 10 Hari Kerja s.d. CK-2)")
+st.caption("Berdasarkan PER-2/BC/2026 Pasal 7, penerbitan CK-2 tidak boleh melebihi 10 hari kerja sejak Tanggal BACK-3 diterbitkan.")
+
+col_warn1, col_warn2 = st.columns(2)
+
+# Menggunakan kolom "JATUH TEMPO BERAPA HARI LAGI" dari database
+col_tempo = "JATUH TEMPO BERAPA HARI LAGI" if "JATUH TEMPO BERAPA HARI LAGI" in df.columns else None
+
+if col_tempo:
+    # Memproses sisa waktu untuk permohonan yang masih dalam proses
+    df_proses = df_filtered[df_filtered['STATUS_CK2_BOOL'] == "PROSES"].copy()
+    
+    if not df_proses.empty:
+        df_proses['SISA_HARI_INT'] = pd.to_numeric(df_proses[col_tempo], errors='coerce')
+        
+        # Saring Berkas yang Melebihi / Menjelang Jatuh Tempo
+        overdue_items = df_proses[df_proses['SISA_HARI_INT'] < 0]
+        critical_items = df_proses[(df_proses['SISA_HARI_INT'] >= 0) & (df_proses['SISA_HARI_INT'] <= 3)]
+        
+        with col_warn1:
+            if not overdue_items.empty:
+                st.error(f"🔴 **{len(overdue_items)} Berkas OVERDUE (Lewat Batas)!**")
+                st.dataframe(overdue_items[[col_pabrik, col_pbck3, col_tgl_pbck3, col_tempo]], hide_index=True, use_container_width=True)
+            else:
+                st.success("🟢 Bebas Overdue! Semua berkas dalam seksi masih berada dalam batas waktu yang sah.")
+                
+        with col_warn2:
+            if not critical_items.empty:
+                st.warning(f"🟡 **{len(critical_items)} Berkas Jatuh Tempo H-3 atau Kurang!**")
+                st.dataframe(critical_items[[col_pabrik, col_pbck3, col_tempo]], hide_index=True, use_container_width=True)
+            else:
+                st.info("🔵 Bagus! Belum ada berkas dalam proses yang mendekati masa kritis (≤ 3 Hari).")
+    else:
+        st.success("🎉 Hebat! Seluruh dokumen pemusnahan/pengolahan periode ini sudah selesai diproses (terbit CK-2).")
+else:
+    st.info("Data jatuh tempo (SLA) saat ini belum termuat secara dinamis dalam database.")
+
+# 11. DETIL DATA TRANSAKSI
+st.markdown("---")
+st.subheader("📑 Detail Data Transaksi (Ter-filter)")
+
+view_cols = [col_pabrik, col_pbck3, col_tgl_pbck3, col_back3, col_tgl_back3, col_ck2, col_tgl_ck2, col_potensi_cukai]
+available_cols_to_show = [c for c in view_cols if c in df_filtered.columns]
+
+st.dataframe(
+    df_filtered[available_cols_to_show].sort_values(by=col_tgl_pbck3, ascending=False) if col_tgl_pbck3 in df_filtered.columns else df_filtered[available_cols_to_show],
+    use_container_width=True,
+    hide_index=True
+)
