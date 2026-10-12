@@ -346,13 +346,29 @@ if not df_display.empty:
             detail_filtered = df_detail[df_detail[col_dtl_agenda].astype(str) == str(selected_agenda)].copy()
             
             if not detail_filtered.empty:
-                kolom_dibuang = ["NILAI CK-2", "TOTAL CUKAI PEMBERITAHUAN", "TOTAL CUKAI MS", "NO", "MOR", "↑ MOR"]
-                cols_to_keep = [c for c in detail_filtered.columns if not str(c).strip().upper().startswith("UNNAMED") and str(c).strip().upper() not in kolom_dibuang]
+                # Kolom-kolom yang mau disembunyikan
+                kolom_dibuang = [
+                    "NILAI CK-2", "TOTAL CUKAI PEMBERITAHUAN", "TOTAL CUKAI MS", 
+                    "NO", "MOR", "↑ MOR", 
+                    "BUNGKUS", "BP SERI I", "BUNGKUS.1", "BP SERI II", 
+                    "BUNGKUS.2", "BP SERI III-TP", "BUNGKUS.3", "BP SERI III-DP", 
+                    "BUNGKUS.4", "BP SERI MMEA", "TOTAL BP"
+                ]
+                
+                # Saring kolom: Abaikan kolom UNNAMED dan kolom di daftar blokir
+                cols_to_keep = [
+                    c for c in detail_filtered.columns 
+                    if not str(c).strip().upper().startswith("UNNAMED") 
+                    and str(c).strip().upper() not in kolom_dibuang
+                ]
                 detail_filtered = detail_filtered[cols_to_keep]
                 
+                # Format angka pakai titik ribuan
                 for col in detail_filtered.columns:
                     if pd.api.types.is_numeric_dtype(detail_filtered[col]):
-                        detail_filtered[col] = detail_filtered[col].apply(lambda x: f"{x:,.0f}".replace(",", ".") if pd.notnull(x) else "0")
+                        detail_filtered[col] = detail_filtered[col].apply(
+                            lambda x: f"{x:,.0f}".replace(",", ".") if pd.notnull(x) else "0"
+                        )
                 
                 st.dataframe(detail_filtered, use_container_width=True, hide_index=True)
             else:
