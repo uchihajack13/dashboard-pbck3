@@ -337,7 +337,7 @@ if not df_display.empty:
         use_container_width=True, 
         hide_index=True,
         on_select="rerun",           
-        selection_mode="single_row"  
+        selection_mode="single-row"  # <-- Ubah garis bawah (_) menjadi strip (-)
     )
 
     selected_rows = tabel_event.selection.rows
