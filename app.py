@@ -348,11 +348,12 @@ if not df_display.empty:
             if not detail_filtered.empty:
                 # Kolom-kolom yang mau disembunyikan
                 kolom_dibuang = [
-                    "NILAI CK-2", "TOTAL CUKAI PEMBERITAHUAN", "TOTAL CUKAI MS", 
+                    "TOTAL CUKAI PEMBERITAHUAN", "TOTAL CUKAI MS", 
                     "NO", "MOR", "↑ MOR", 
                     "BUNGKUS", "BP SERI I", "BUNGKUS.1", "BP SERI II", 
                     "BUNGKUS.2", "BP SERI III-TP", "BUNGKUS.3", "BP SERI III-DP", 
-                    "BUNGKUS.4", "BP SERI MMEA", "TOTAL BP"
+                    "BUNGKUS.4", "BP SERI MMEA", "TOTAL BP",
+                    "JUMLAH MS (BUNGKUS)", "NILAI CUKAI PEMBERITAHUAN", "NILAI CUKAI MS"
                 ]
                 
                 # Saring kolom: Abaikan kolom UNNAMED dan kolom di daftar blokir
@@ -362,6 +363,27 @@ if not df_display.empty:
                     and str(c).strip().upper() not in kolom_dibuang
                 ]
                 detail_filtered = detail_filtered[cols_to_keep]
+
+                # --- PINDAHKAN NILAI CK-2 KE SEBELAH CUKAI BACK-3 ---
+                cols = list(detail_filtered.columns)
+                ck2_col = next((c for c in cols if str(c).strip().upper() == "NILAI CK-2"), None)
+                
+                if ck2_col:
+                    cols.remove(ck2_col)
+                    insert_idx = len(cols)
+                    
+                    # Coba cari lokasi kolom Cukai BACK-3
+                    for i, c in enumerate(cols):
+                        c_up = str(c).upper()
+                        if "CUKAI" in c_up and "BACK-3" in c_up:
+                            insert_idx = i + 1
+                            break
+                            
+                    cols.insert(insert_idx, ck2_col)
+                    detail_filtered = detail_filtered[cols]
+                    
+                    # Ubah nama header-nya biar rapi
+                    detail_filtered = detail_filtered.rename(columns={ck2_col: "TOTAL NILAI CK-2"})
                 
                 # Format angka pakai titik ribuan
                 for col in detail_filtered.columns:
