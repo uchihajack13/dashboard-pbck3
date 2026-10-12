@@ -343,9 +343,23 @@ if not df_display.empty:
         
         if not df_detail.empty:
             col_dtl_agenda = "AGENDA" if "AGENDA" in df_detail.columns else df_detail.columns[0]
-            detail_filtered = df_detail[df_detail[col_dtl_agenda].astype(str) == str(selected_agenda)]
+            # Pakai .copy() biar aman saat datanya dimodifikasi
+            detail_filtered = df_detail[df_detail[col_dtl_agenda].astype(str) == str(selected_agenda)].copy()
             
             if not detail_filtered.empty:
+                
+                # --- FIX 1: Hapus kolom "hantu" (Unnamed) dari Excel ---
+                cols_to_keep = [c for c in detail_filtered.columns if not str(c).strip().upper().startswith("UNNAMED")]
+                detail_filtered = detail_filtered[cols_to_keep]
+                
+                # --- FIX 2: Format otomatis semua kolom angka pakai titik ribuan ---
+                for col in detail_filtered.columns:
+                    # Cek apakah tipe data di kolom tersebut adalah angka (numerik)
+                    if pd.api.types.is_numeric_dtype(detail_filtered[col]):
+                        detail_filtered[col] = detail_filtered[col].apply(
+                            lambda x: f"{x:,.0f}".replace(",", ".") if pd.notnull(x) else "0"
+                        )
+                
                 st.dataframe(detail_filtered, use_container_width=True, hide_index=True)
             else:
                 st.info(f"Tidak ada rincian tambahan di sheet 'Detail' untuk Agenda {selected_agenda}.")
