@@ -475,24 +475,30 @@ with col_chart2:
     st.caption("Distribusi nilai pengembalian cukai yang memenuhi syarat (MS) per pabrik.")
     if col_pabrik in df_filtered.columns and col_cukai_ck2 in df_filtered.columns and not df_filtered.empty:
         df_pabrik_grp = df_filtered.groupby(col_pabrik)[col_cukai_ck2].sum().reset_index()
-        df_pabrik_grp = df_pabrik_grp[df_pabrik_grp[col_cukai_ck2] > 0]
-        df_pabrik_grp = df_pabrik_grp.sort_values(by=col_cukai_ck2, ascending=False).head(5)
+        df_pabrik_grp = df_pabrik_grp[df_pabrik_grp[col_cukai_ck2] > 0].sort_values(by=col_cukai_ck2, ascending=False).head(5)
         
         if not df_pabrik_grp.empty:
             fig_pie = px.pie(
-                df_pabrik_grp,
-                names=col_pabrik,
-                values=col_cukai_ck2,
-                color_discrete_sequence=px.colors.sequential.Blues_r,
+                df_pabrik_grp, 
+                names=col_pabrik, 
+                values=col_cukai_ck2, 
+                color_discrete_sequence=px.colors.sequential.Blues_r, 
                 hole=0.45
             )
+            
+            # --- TAMBAHAN KODE DARI GUE BRO ---
+            # Custom hover template supaya formatnya Rp X.XXX.XXX (bukan E+11)
+            fig_pie.update_traces(
+                hovertemplate="<b>%{label}</b><br>Nilai Cukai: Rp %{value:,.0f}<br>Porsi: %{percent}<extra></extra>"
+            )
+            # ----------------------------------
+
             fig_pie.update_layout(height=320, margin=dict(t=15, b=15, l=10, r=10))
             st.plotly_chart(fig_pie, use_container_width=True)
-        else:
+        else: 
             st.info("Belum ada realisasi nilai CK-2 pada filter ini.")
-    else:
+    else: 
         st.info("Data belum tersedia untuk grafik kontribusi.")
-
 st.markdown("---")
 
 # ==============================================================================
