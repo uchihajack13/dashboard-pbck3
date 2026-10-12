@@ -37,31 +37,46 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ---- FORMATTER BARU (Angka Asli + Singkatan) ----
 def fmt_rupiah(val):
     if pd.isna(val) or val == 0: return "Rp 0"
     is_negative = val < 0
     val = abs(val)
+    
+    real_str = f"Rp {val:,.0f}".replace(",", ".")
+    
     if val >= 1_000_000_000_000:
-        formatted = f"Rp {val/1_000_000_000_000:.2f} Triliun".replace(".", ",")
+        alias = f"({val/1_000_000_000_000:.2f} Triliun)".replace(".", ",")
+        formatted = f"{real_str} <span style='font-size: 13px; color: #64748B;'>{alias}</span>"
     elif val >= 1_000_000_000:
-        formatted = f"Rp {val/1_000_000_000:.2f} Miliar".replace(".", ",")
+        alias = f"({val/1_000_000_000:.2f} Miliar)".replace(".", ",")
+        formatted = f"{real_str} <span style='font-size: 13px; color: #64748B;'>{alias}</span>"
     elif val >= 1_000_000:
-        formatted = f"Rp {val/1_000_000:.2f} Juta".replace(".", ",")
+        alias = f"({val/1_000_000:.2f} Juta)".replace(".", ",")
+        formatted = f"{real_str} <span style='font-size: 13px; color: #64748B;'>{alias}</span>"
     else:
-        formatted = f"Rp {val:,.0f}".replace(",", ".")
+        formatted = real_str
+        
     return f"-{formatted}" if is_negative else formatted
 
 def fmt_bungkus(val):
     if pd.isna(val) or val == 0: return "0"
     is_negative = val < 0
     val = abs(val)
+    
+    real_str = f"{val:,.0f}".replace(",", ".")
+    
     if val >= 1_000_000_000:
-        formatted = f"{val/1_000_000_000:.2f} M".replace(".", ",")
+        alias = f"({val/1_000_000_000:.2f} M)".replace(".", ",")
+        formatted = f"{real_str} <span style='font-size: 13px; color: #64748B;'>{alias}</span>"
     elif val >= 1_000_000:
-        formatted = f"{val/1_000_000:.2f} Jt".replace(".", ",")
+        alias = f"({val/1_000_000:.2f} Jt)".replace(".", ",")
+        formatted = f"{real_str} <span style='font-size: 13px; color: #64748B;'>{alias}</span>"
     else:
-        formatted = f"{val:,.0f}".replace(",", ".")
+        formatted = real_str
+        
     return f"-{formatted}" if is_negative else formatted
+# -------------------------------------------------
 
 LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/1/1a/Logo_Bea_Cukai.png"
 col_logo, col_header = st.columns([1, 8])
@@ -200,11 +215,12 @@ visual_periode_lbl = f"Tahun Anggaran {selected_tahun}"
 if mode_periode == "Bulanan Tunggal (Single Month)": visual_periode_lbl = f"Bulan Realisasi {selected_bulan_nama} {selected_tahun}"
 elif mode_periode == "Kumulatif (s.d. Bulan)": visual_periode_lbl = f"Realisasi s.d. Bulan {selected_bulan_nama} {selected_tahun}"
 
+# Regex banner info juga menyesuaikan
 st.markdown(f"""
 <div class="info-banner">
     📌 <b>Periode Terpantau:</b> <code>{visual_periode_lbl}</code> &nbsp;|&nbsp; 
     🏢 <b>Entitas:</b> <code>{selected_pabrik}</code> &nbsp;|&nbsp; 
-    📄 <b>Status Rekonsiliasi:</b> {'<span class="badge-success">Fisik 100% Sesuai</span>' if selisih_fisik == 0 else f'<span class="badge-danger">Selisih Fisik: -{fmt_rupiah(selisih_fisik)} ({fmt_bungkus(total_bks_tms)} Bks TMS)</span>'}
+    📄 <b>Status Rekonsiliasi:</b> {'<span class="badge-success">Fisik 100% Sesuai</span>' if selisih_fisik == 0 else f'<span class="badge-danger">Selisih Fisik: {fmt_rupiah(-selisih_fisik)} ({fmt_bungkus(total_bks_tms)} Bks TMS)</span>'}
 </div>
 """, unsafe_allow_html=True)
 
@@ -219,21 +235,22 @@ with r1_c3:
 
 r2_c1, r2_c2, r2_c3 = st.columns(3)
 with r2_c1:
-    st.markdown(f"""<div class="kpi-card border-slate"><div class="kpi-header"><span class="kpi-label">Nilai Pengajuan (PBCK-3)</span><span class="kpi-icon">📋</span></div><div class="kpi-value" style="font-size: 20px;">{fmt_rupiah(cukai_pbck3_val)}</div><div class="kpi-subtext">Potensi nilai cukai pemberitahuan</div></div>""", unsafe_allow_html=True)
+    # Font dikecilkan dari 20px ke 18px supaya pas dengan teks tambahannya
+    st.markdown(f"""<div class="kpi-card border-slate"><div class="kpi-header"><span class="kpi-label">Nilai Pengajuan (PBCK-3)</span><span class="kpi-icon">📋</span></div><div class="kpi-value" style="font-size: 18px;">{fmt_rupiah(cukai_pbck3_val)}</div><div class="kpi-subtext" style="margin-top: 4px;">Potensi nilai cukai pemberitahuan</div></div>""", unsafe_allow_html=True)
 with r2_c2:
-    badge_cukai = f'<span class="badge-danger">Selisih TMS: -{fmt_rupiah(selisih_fisik)}</span>' if selisih_fisik > 0 else '<span class="badge-success">100% Memenuhi Syarat</span>'
-    st.markdown(f"""<div class="kpi-card border-green" style="background: #F0FDF4;"><div class="kpi-header"><span class="kpi-label" style="color: #047857;">Realisasi Cukai CK-2 (MS)</span><span class="kpi-icon">💸</span></div><div class="kpi-value" style="color: #065F46; font-size: 20px;">{fmt_rupiah(cukai_ck2_val)}</div><div class="kpi-subtext">{badge_cukai}</div></div>""", unsafe_allow_html=True)
+    badge_cukai = f'<span class="badge-danger">Selisih TMS: {fmt_rupiah(-selisih_fisik)}</span>' if selisih_fisik > 0 else '<span class="badge-success">100% Memenuhi Syarat</span>'
+    st.markdown(f"""<div class="kpi-card border-green" style="background: #F0FDF4;"><div class="kpi-header"><span class="kpi-label" style="color: #047857;">Realisasi Cukai CK-2 (MS)</span><span class="kpi-icon">💸</span></div><div class="kpi-value" style="color: #065F46; font-size: 18px;">{fmt_rupiah(cukai_ck2_val)}</div><div class="kpi-subtext" style="margin-top: 4px;">{badge_cukai}</div></div>""", unsafe_allow_html=True)
 with r2_c3:
-    st.markdown(f"""<div class="kpi-card border-amber"><div class="kpi-header"><span class="kpi-label">Biaya Pengganti (BP) Pita Cukai</span><span class="kpi-icon">🏦</span></div><div class="kpi-value" style="color: #92400E; font-size: 20px;">{fmt_rupiah(biaya_pengganti)}</div><div class="kpi-subtext">Penerimaan Negara (PMK 113/2025)</div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="kpi-card border-amber"><div class="kpi-header"><span class="kpi-label">Biaya Pengganti (BP) Pita Cukai</span><span class="kpi-icon">🏦</span></div><div class="kpi-value" style="color: #92400E; font-size: 18px;">{fmt_rupiah(biaya_pengganti)}</div><div class="kpi-subtext" style="margin-top: 4px;">Penerimaan Negara (PMK 113/2025)</div></div>""", unsafe_allow_html=True)
 
 r3_c1, r3_c2, r3_c3 = st.columns(3)
 with r3_c1:
-    st.markdown(f"""<div class="kpi-card border-slate"><div class="kpi-header"><span class="kpi-label">Kemasan Diajukan (PBCK-3)</span><span class="kpi-icon">📦</span></div><div class="kpi-value">{fmt_bungkus(total_bks_pbck3)} <span style="font-size: 13px; color: #64748B;">Bungkus</span></div><div class="kpi-subtext">Jumlah fisik awal yang diberitahukan</div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="kpi-card border-slate"><div class="kpi-header"><span class="kpi-label">Kemasan Diajukan (PBCK-3)</span><span class="kpi-icon">📦</span></div><div class="kpi-value" style="font-size: 18px;">{fmt_bungkus(total_bks_pbck3)} <span style="font-size: 13px; color: #64748B;">Bks</span></div><div class="kpi-subtext" style="margin-top: 4px;">Jumlah fisik awal yang diberitahukan</div></div>""", unsafe_allow_html=True)
 with r3_c2:
-    st.markdown(f"""<div class="kpi-card border-green"><div class="kpi-header"><span class="kpi-label" style="color: #047857;">Kemasan Disetujui (MS)</span><span class="kpi-icon">✅</span></div><div class="kpi-value" style="color: #065F46;">{fmt_bungkus(total_bks_ck2)} <span style="font-size: 13px; color: #047857;">Bungkus</span></div><div class="kpi-subtext"><span class="badge-success">Memenuhi Syarat Pengembalian</span></div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="kpi-card border-green"><div class="kpi-header"><span class="kpi-label" style="color: #047857;">Kemasan Disetujui (MS)</span><span class="kpi-icon">✅</span></div><div class="kpi-value" style="color: #065F46; font-size: 18px;">{fmt_bungkus(total_bks_ck2)} <span style="font-size: 13px; color: #047857;">Bks</span></div><div class="kpi-subtext" style="margin-top: 4px;"><span class="badge-success">Memenuhi Syarat Pengembalian</span></div></div>""", unsafe_allow_html=True)
 with r3_c3:
     badge_tms = "badge-danger" if total_bks_tms > 0 else "badge-success"
-    st.markdown(f"""<div class="kpi-card border-red"><div class="kpi-header"><span class="kpi-label" style="color: #B91C1C;">Kemasan Ditolak / TMS</span><span class="kpi-icon">❌</span></div><div class="kpi-value" style="color: #991B1B;">{fmt_bungkus(total_bks_tms)} <span style="font-size: 13px; color: #991B1B;">Bungkus</span></div><div class="kpi-subtext"><span class="{badge_tms}">{'Tidak Mendapat Pengembalian' if total_bks_tms > 0 else 'Nihil Selisih (0 Bks)'}</span></div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="kpi-card border-red"><div class="kpi-header"><span class="kpi-label" style="color: #B91C1C;">Kemasan Ditolak / TMS</span><span class="kpi-icon">❌</span></div><div class="kpi-value" style="color: #991B1B; font-size: 18px;">{fmt_bungkus(total_bks_tms)} <span style="font-size: 13px; color: #991B1B;">Bks</span></div><div class="kpi-subtext" style="margin-top: 4px;"><span class="{badge_tms}">{'Tidak Mendapat Pengembalian' if total_bks_tms > 0 else 'Nihil Selisih (0 Bks)'}</span></div></div>""", unsafe_allow_html=True)
 
 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
@@ -346,7 +363,6 @@ if not df_display.empty:
             detail_filtered = df_detail[df_detail[col_dtl_agenda].astype(str) == str(selected_agenda)].copy()
             
             if not detail_filtered.empty:
-                # Kolom-kolom yang mau disembunyikan
                 kolom_dibuang = [
                     "TOTAL CUKAI PEMBERITAHUAN", "TOTAL CUKAI MS", 
                     "NO", "MOR", "↑ MOR", 
@@ -356,7 +372,6 @@ if not df_display.empty:
                     "JUMLAH MS (BUNGKUS)", "NILAI CUKAI PEMBERITAHUAN", "NILAI CUKAI MS"
                 ]
                 
-                # Saring kolom: Abaikan kolom UNNAMED dan kolom di daftar blokir
                 cols_to_keep = [
                     c for c in detail_filtered.columns 
                     if not str(c).strip().upper().startswith("UNNAMED") 
@@ -364,39 +379,29 @@ if not df_display.empty:
                 ]
                 detail_filtered = detail_filtered[cols_to_keep]
 
-                # --- PINDAHKAN NILAI CK-2 KE SEBELAH CUKAI BACK-3 ---
                 cols = list(detail_filtered.columns)
                 ck2_col = next((c for c in cols if str(c).strip().upper() == "NILAI CK-2"), None)
                 
                 if ck2_col:
                     cols.remove(ck2_col)
                     insert_idx = len(cols)
-                    
-                    # Coba cari lokasi kolom Cukai BACK-3
                     for i, c in enumerate(cols):
                         c_up = str(c).upper()
                         if "CUKAI" in c_up and "BACK-3" in c_up:
                             insert_idx = i + 1
                             break
-                            
                     cols.insert(insert_idx, ck2_col)
                     detail_filtered = detail_filtered[cols]
-                    
-                    # Ubah nama header-nya biar rapi sesuai permintaan lu
                     detail_filtered = detail_filtered.rename(columns={ck2_col: "NILAI CK-2"})
                 
-                # Format angka pakai titik ribuan
                 for col in detail_filtered.columns:
                     if pd.api.types.is_numeric_dtype(detail_filtered[col]):
                         detail_filtered[col] = detail_filtered[col].apply(
                             lambda x: f"{x:,.0f}".replace(",", ".") if pd.notnull(x) else "0"
                         )
                 
-                # --- MANIPULASI TAMPILAN "MERGE" KOLOM NILAI CK-2 ---
                 if "NILAI CK-2" in detail_filtered.columns and len(detail_filtered) > 1:
-                    # Ambil semua nilai di kolom NILAI CK-2 (sudah dalam bentuk string berformat)
                     vals = detail_filtered["NILAI CK-2"].tolist()
-                    # Biarkan baris pertama ada isinya, sisanya dikosongkan ("") agar terlihat seperti di-merge
                     new_vals = [vals[0]] + [""] * (len(vals) - 1)
                     detail_filtered["NILAI CK-2"] = new_vals
                 
