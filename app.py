@@ -37,46 +37,45 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ---- FORMATTER BARU (Angka Asli + Singkatan) ----
-def fmt_rupiah(val):
+# ---- FORMATTER BANNER (Hanya Angka Presisi Agar Bersih) ----
+def fmt_exact_rp(val):
+    if pd.isna(val) or val == 0: return "Rp 0"
+    return f"-Rp {abs(val):,.0f}".replace(",", ".") if val < 0 else f"Rp {abs(val):,.0f}".replace(",", ".")
+
+def fmt_exact_bks(val):
+    if pd.isna(val) or val == 0: return "0"
+    return f"-{abs(val):,.0f}".replace(",", ".") if val < 0 else f"{abs(val):,.0f}".replace(",", ".")
+
+# ---- FORMATTER KPI CARDS (Stacking Vertikal) ----
+def fmt_kpi_rupiah(val):
     if pd.isna(val) or val == 0: return "Rp 0"
     is_negative = val < 0
     val = abs(val)
-    
     real_str = f"Rp {val:,.0f}".replace(",", ".")
     
-    if val >= 1_000_000_000_000:
-        alias = f"({val/1_000_000_000_000:.2f} Triliun)".replace(".", ",")
-        formatted = f"{real_str} <span style='font-size: 13px; color: #64748B;'>{alias}</span>"
-    elif val >= 1_000_000_000:
-        alias = f"({val/1_000_000_000:.2f} Miliar)".replace(".", ",")
-        formatted = f"{real_str} <span style='font-size: 13px; color: #64748B;'>{alias}</span>"
-    elif val >= 1_000_000:
-        alias = f"({val/1_000_000:.2f} Juta)".replace(".", ",")
-        formatted = f"{real_str} <span style='font-size: 13px; color: #64748B;'>{alias}</span>"
-    else:
-        formatted = real_str
+    if val >= 1_000_000_000_000: alias = f"{val/1_000_000_000_000:.2f} Triliun".replace(".", ",")
+    elif val >= 1_000_000_000: alias = f"{val/1_000_000_000:.2f} Miliar".replace(".", ",")
+    elif val >= 1_000_000: alias = f"{val/1_000_000:.2f} Juta".replace(".", ",")
+    else: return f"-{real_str}" if is_negative else real_str
         
-    return f"-{formatted}" if is_negative else formatted
+    final_str = f"{real_str}<div style='font-size: 13px; color: #64748B; font-weight: 700; margin-top: 2px;'>≈ {alias}</div>"
+    return f"-{final_str}" if is_negative else final_str
 
-def fmt_bungkus(val):
-    if pd.isna(val) or val == 0: return "0"
+def fmt_kpi_bungkus(val):
+    if pd.isna(val) or val == 0: return "0 <span style='font-size: 13px; font-weight: 500;'>Bks</span>"
     is_negative = val < 0
     val = abs(val)
-    
     real_str = f"{val:,.0f}".replace(",", ".")
     
-    if val >= 1_000_000_000:
-        alias = f"({val/1_000_000_000:.2f} M)".replace(".", ",")
-        formatted = f"{real_str} <span style='font-size: 13px; color: #64748B;'>{alias}</span>"
-    elif val >= 1_000_000:
-        alias = f"({val/1_000_000:.2f} Jt)".replace(".", ",")
-        formatted = f"{real_str} <span style='font-size: 13px; color: #64748B;'>{alias}</span>"
-    else:
-        formatted = real_str
+    if val >= 1_000_000_000: alias = f"{val/1_000_000_000:.2f} M".replace(".", ",")
+    elif val >= 1_000_000: alias = f"{val/1_000_000:.2f} Jt".replace(".", ",")
+    else: 
+        base = f"{real_str} <span style='font-size: 13px; font-weight: 500;'>Bks</span>"
+        return f"-{base}" if is_negative else base
         
-    return f"-{formatted}" if is_negative else formatted
-# -------------------------------------------------
+    final_str = f"{real_str} <span style='font-size: 13px; font-weight: 500;'>Bks</span><div style='font-size: 13px; color: #64748B; font-weight: 700; margin-top: 2px;'>≈ {alias} Bks</div>"
+    return f"-{final_str}" if is_negative else final_str
+# ------------------------------------------------
 
 LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/1/1a/Logo_Bea_Cukai.png"
 col_logo, col_header = st.columns([1, 8])
@@ -215,42 +214,40 @@ visual_periode_lbl = f"Tahun Anggaran {selected_tahun}"
 if mode_periode == "Bulanan Tunggal (Single Month)": visual_periode_lbl = f"Bulan Realisasi {selected_bulan_nama} {selected_tahun}"
 elif mode_periode == "Kumulatif (s.d. Bulan)": visual_periode_lbl = f"Realisasi s.d. Bulan {selected_bulan_nama} {selected_tahun}"
 
-# Regex banner info juga menyesuaikan
 st.markdown(f"""
 <div class="info-banner">
     📌 <b>Periode Terpantau:</b> <code>{visual_periode_lbl}</code> &nbsp;|&nbsp; 
     🏢 <b>Entitas:</b> <code>{selected_pabrik}</code> &nbsp;|&nbsp; 
-    📄 <b>Status Rekonsiliasi:</b> {'<span class="badge-success">Fisik 100% Sesuai</span>' if selisih_fisik == 0 else f'<span class="badge-danger">Selisih Fisik: {fmt_rupiah(-selisih_fisik)} ({fmt_bungkus(total_bks_tms)} Bks TMS)</span>'}
+    📄 <b>Status Rekonsiliasi:</b> {'<span class="badge-success">Fisik 100% Sesuai</span>' if selisih_fisik == 0 else f'<span class="badge-danger">Selisih Fisik: {fmt_exact_rp(-selisih_fisik)} ({fmt_exact_bks(total_bks_tms)} Bks TMS)</span>'}
 </div>
 """, unsafe_allow_html=True)
 
 r1_c1, r1_c2, r1_c3 = st.columns(3)
 with r1_c1:
-    st.markdown(f"""<div class="kpi-card border-blue"><div class="kpi-header"><span class="kpi-label">Permohonan PBCK-3 Terlayani</span><span class="kpi-icon">📥</span></div><div class="kpi-value">{total_pbck3:,} <span style="font-size: 14px; color: #64748B;">Berkas</span></div><div class="kpi-subtext">Pengajuan permohonan periode terpilih</div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="kpi-card border-blue"><div class="kpi-header"><span class="kpi-label">Permohonan PBCK-3 Terlayani</span><span class="kpi-icon">📥</span></div><div class="kpi-value">{total_pbck3:,.0f} <span style="font-size: 14px; color: #64748B;">Berkas</span></div><div class="kpi-subtext">Pengajuan permohonan periode terpilih</div></div>""".replace(",", "."), unsafe_allow_html=True)
 with r1_c2:
-    st.markdown(f"""<div class="kpi-card border-green"><div class="kpi-header"><span class="kpi-label">Realisasi CK-2 Terbit</span><span class="kpi-icon">📜</span></div><div class="kpi-value">{total_ck2:,} <span style="font-size: 14px; color: #64748B;">Dokumen</span></div><div class="kpi-subtext"><span class="badge-success">{persen_selesai:.1f}% Selesai</span> dokumen resmi diterbitkan</div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="kpi-card border-green"><div class="kpi-header"><span class="kpi-label">Realisasi CK-2 Terbit</span><span class="kpi-icon">📜</span></div><div class="kpi-value">{total_ck2:,.0f} <span style="font-size: 14px; color: #64748B;">Dokumen</span></div><div class="kpi-subtext"><span class="badge-success">{persen_selesai:.1f}% Selesai</span> dokumen resmi diterbitkan</div></div>""".replace(",", "."), unsafe_allow_html=True)
 with r1_c3:
     badge_ot = "badge-success" if total_outstanding == 0 else "badge-warning"
-    st.markdown(f"""<div class="kpi-card border-amber"><div class="kpi-header"><span class="kpi-label">Outstanding (Dalam Proses)</span><span class="kpi-icon">⏳</span></div><div class="kpi-value">{total_outstanding:,} <span style="font-size: 14px; color: #64748B;">Dokumen</span></div><div class="kpi-subtext"><span class="{badge_ot}">{(total_outstanding/total_pbck3*100) if total_pbck3 > 0 else 0:.1f}% Beban Kerja</span> menunggu CK-2</div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="kpi-card border-amber"><div class="kpi-header"><span class="kpi-label">Outstanding (Dalam Proses)</span><span class="kpi-icon">⏳</span></div><div class="kpi-value">{total_outstanding:,.0f} <span style="font-size: 14px; color: #64748B;">Dokumen</span></div><div class="kpi-subtext"><span class="{badge_ot}">{(total_outstanding/total_pbck3*100) if total_pbck3 > 0 else 0:.1f}% Beban Kerja</span> menunggu CK-2</div></div>""".replace(",", "."), unsafe_allow_html=True)
 
 r2_c1, r2_c2, r2_c3 = st.columns(3)
 with r2_c1:
-    # Font dikecilkan dari 20px ke 18px supaya pas dengan teks tambahannya
-    st.markdown(f"""<div class="kpi-card border-slate"><div class="kpi-header"><span class="kpi-label">Nilai Pengajuan (PBCK-3)</span><span class="kpi-icon">📋</span></div><div class="kpi-value" style="font-size: 18px;">{fmt_rupiah(cukai_pbck3_val)}</div><div class="kpi-subtext" style="margin-top: 4px;">Potensi nilai cukai pemberitahuan</div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="kpi-card border-slate"><div class="kpi-header"><span class="kpi-label">Nilai Pengajuan (PBCK-3)</span><span class="kpi-icon">📋</span></div><div class="kpi-value" style="font-size: 19px;">{fmt_kpi_rupiah(cukai_pbck3_val)}</div><div class="kpi-subtext" style="margin-top: 4px;">Potensi nilai cukai pemberitahuan</div></div>""", unsafe_allow_html=True)
 with r2_c2:
-    badge_cukai = f'<span class="badge-danger">Selisih TMS: {fmt_rupiah(-selisih_fisik)}</span>' if selisih_fisik > 0 else '<span class="badge-success">100% Memenuhi Syarat</span>'
-    st.markdown(f"""<div class="kpi-card border-green" style="background: #F0FDF4;"><div class="kpi-header"><span class="kpi-label" style="color: #047857;">Realisasi Cukai CK-2 (MS)</span><span class="kpi-icon">💸</span></div><div class="kpi-value" style="color: #065F46; font-size: 18px;">{fmt_rupiah(cukai_ck2_val)}</div><div class="kpi-subtext" style="margin-top: 4px;">{badge_cukai}</div></div>""", unsafe_allow_html=True)
+    badge_cukai = f'<span class="badge-danger">Selisih TMS: {fmt_exact_rp(-selisih_fisik)}</span>' if selisih_fisik > 0 else '<span class="badge-success">100% Memenuhi Syarat</span>'
+    st.markdown(f"""<div class="kpi-card border-green" style="background: #F0FDF4;"><div class="kpi-header"><span class="kpi-label" style="color: #047857;">Realisasi Cukai CK-2 (MS)</span><span class="kpi-icon">💸</span></div><div class="kpi-value" style="color: #065F46; font-size: 19px;">{fmt_kpi_rupiah(cukai_ck2_val)}</div><div class="kpi-subtext" style="margin-top: 4px;">{badge_cukai}</div></div>""", unsafe_allow_html=True)
 with r2_c3:
-    st.markdown(f"""<div class="kpi-card border-amber"><div class="kpi-header"><span class="kpi-label">Biaya Pengganti (BP) Pita Cukai</span><span class="kpi-icon">🏦</span></div><div class="kpi-value" style="color: #92400E; font-size: 18px;">{fmt_rupiah(biaya_pengganti)}</div><div class="kpi-subtext" style="margin-top: 4px;">Penerimaan Negara (PMK 113/2025)</div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="kpi-card border-amber"><div class="kpi-header"><span class="kpi-label">Biaya Pengganti (BP) Pita Cukai</span><span class="kpi-icon">🏦</span></div><div class="kpi-value" style="color: #92400E; font-size: 19px;">{fmt_kpi_rupiah(biaya_pengganti)}</div><div class="kpi-subtext" style="margin-top: 4px;">Penerimaan Negara (PMK 113/2025)</div></div>""", unsafe_allow_html=True)
 
 r3_c1, r3_c2, r3_c3 = st.columns(3)
 with r3_c1:
-    st.markdown(f"""<div class="kpi-card border-slate"><div class="kpi-header"><span class="kpi-label">Kemasan Diajukan (PBCK-3)</span><span class="kpi-icon">📦</span></div><div class="kpi-value" style="font-size: 18px;">{fmt_bungkus(total_bks_pbck3)} <span style="font-size: 13px; color: #64748B;">Bks</span></div><div class="kpi-subtext" style="margin-top: 4px;">Jumlah fisik awal yang diberitahukan</div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="kpi-card border-slate"><div class="kpi-header"><span class="kpi-label">Kemasan Diajukan (PBCK-3)</span><span class="kpi-icon">📦</span></div><div class="kpi-value" style="font-size: 19px;">{fmt_kpi_bungkus(total_bks_pbck3)}</div><div class="kpi-subtext" style="margin-top: 4px;">Jumlah fisik awal yang diberitahukan</div></div>""", unsafe_allow_html=True)
 with r3_c2:
-    st.markdown(f"""<div class="kpi-card border-green"><div class="kpi-header"><span class="kpi-label" style="color: #047857;">Kemasan Disetujui (MS)</span><span class="kpi-icon">✅</span></div><div class="kpi-value" style="color: #065F46; font-size: 18px;">{fmt_bungkus(total_bks_ck2)} <span style="font-size: 13px; color: #047857;">Bks</span></div><div class="kpi-subtext" style="margin-top: 4px;"><span class="badge-success">Memenuhi Syarat Pengembalian</span></div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="kpi-card border-green"><div class="kpi-header"><span class="kpi-label" style="color: #047857;">Kemasan Disetujui (MS)</span><span class="kpi-icon">✅</span></div><div class="kpi-value" style="color: #065F46; font-size: 19px;">{fmt_kpi_bungkus(total_bks_ck2)}</div><div class="kpi-subtext" style="margin-top: 4px;"><span class="badge-success">Memenuhi Syarat Pengembalian</span></div></div>""", unsafe_allow_html=True)
 with r3_c3:
     badge_tms = "badge-danger" if total_bks_tms > 0 else "badge-success"
-    st.markdown(f"""<div class="kpi-card border-red"><div class="kpi-header"><span class="kpi-label" style="color: #B91C1C;">Kemasan Ditolak / TMS</span><span class="kpi-icon">❌</span></div><div class="kpi-value" style="color: #991B1B; font-size: 18px;">{fmt_bungkus(total_bks_tms)} <span style="font-size: 13px; color: #991B1B;">Bks</span></div><div class="kpi-subtext" style="margin-top: 4px;"><span class="{badge_tms}">{'Tidak Mendapat Pengembalian' if total_bks_tms > 0 else 'Nihil Selisih (0 Bks)'}</span></div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="kpi-card border-red"><div class="kpi-header"><span class="kpi-label" style="color: #B91C1C;">Kemasan Ditolak / TMS</span><span class="kpi-icon">❌</span></div><div class="kpi-value" style="color: #991B1B; font-size: 19px;">{fmt_kpi_bungkus(total_bks_tms)}</div><div class="kpi-subtext" style="margin-top: 4px;"><span class="{badge_tms}">{'Tidak Mendapat Pengembalian' if total_bks_tms > 0 else 'Nihil Selisih (0 Bks)'}</span></div></div>""", unsafe_allow_html=True)
 
 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
@@ -276,8 +273,10 @@ with col_chart2:
         df_pabrik_grp = df_filtered.groupby(col_pabrik)[col_cukai_ck2].sum().reset_index()
         df_pabrik_grp = df_pabrik_grp[df_pabrik_grp[col_cukai_ck2] > 0].sort_values(by=col_cukai_ck2, ascending=False).head(5)
         if not df_pabrik_grp.empty:
-            fig_pie = px.pie(df_pabrik_grp, names=col_pabrik, values=col_cukai_ck2, color_discrete_sequence=px.colors.sequential.Blues_r, hole=0.45)
-            fig_pie.update_traces(hovertemplate="<b>%{label}</b><br>Nilai Cukai: Rp %{value:,.0f}<br>Porsi: %{percent}<extra></extra>")
+            # Format Rupiah khusus tooltip Plotly
+            df_pabrik_grp['CUKAI_STR'] = df_pabrik_grp[col_cukai_ck2].apply(lambda x: f"Rp {x:,.0f}".replace(",", "."))
+            fig_pie = px.pie(df_pabrik_grp, names=col_pabrik, values=col_cukai_ck2, color_discrete_sequence=px.colors.sequential.Blues_r, hole=0.45, custom_data=['CUKAI_STR'])
+            fig_pie.update_traces(hovertemplate="<b>%{label}</b><br>Nilai Cukai: %{customdata[0]}<br>Porsi: %{percent}<extra></extra>")
             fig_pie.update_layout(height=320, margin=dict(t=15, b=15, l=10, r=10))
             st.plotly_chart(fig_pie, use_container_width=True)
         else: st.info("Belum ada realisasi nilai CK-2 pada filter ini.")
