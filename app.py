@@ -202,14 +202,23 @@ df['BULAN_CK2_NAMA'] = df['BULAN_CK2_ANGKA'].map(INDO_BULAN)
 
 # Konversi Kolom Numerik Bersih
 def clean_num(series):
-    return pd.to_numeric(
-        series.astype(str)
-        .str.replace("Rp", "", regex=False)
-        .str.replace(".", "", regex=False)
-        .str.replace(",", ".", regex=False)
-        .str.strip(),
-        errors='coerce'
-    ).fillna(0)
+    def parse_value(x):
+        if pd.isna(x):
+            return 0
+        # Jika data aslinya sudah berupa angka (integer/float) dari Excel, biarkan utuh!
+        if isinstance(x, (int, float)):
+            return x
+            
+        # Jika datanya terbaca sebagai teks/string (contoh: "Rp 1.000.000,00")
+        x_str = str(x).replace("Rp", "").strip()
+        # Hilangkan titik ribuan, lalu ubah koma desimal jadi titik desimal standar Python
+        x_str = x_str.replace(".", "").replace(",", ".")
+        try:
+            return float(x_str)
+        except ValueError:
+            return 0
+            
+    return series.apply(parse_value)
 
 if col_cukai_pbck3 in df.columns: df[col_cukai_pbck3] = clean_num(df[col_cukai_pbck3])
 if col_cukai_ck2 in df.columns: df[col_cukai_ck2] = clean_num(df[col_cukai_ck2])
