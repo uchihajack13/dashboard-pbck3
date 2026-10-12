@@ -156,7 +156,7 @@ except Exception as e:
     st.stop()
 
 # ==============================================================================
-# 4. RESOLVING COLUMNS & SMART DATE PARSER
+# 4. RESOLVING COLUMNS & PRE-PROCESSING (SEMUA DI TABEL UTAMA DF)
 # ==============================================================================
 col_pabrik = "PERUSAHAAN" if "PERUSAHAAN" in df.columns else ("PERUSAHAAN_KEP" if "PERUSAHAAN_KEP" in df.columns else df.columns[1])
 col_pbck3 = "NO_PBCK-3" if "NO_PBCK-3" in df.columns else ("NO_PBCK_3" if "NO_PBCK_3" in df.columns else df.columns[0])
@@ -178,9 +178,21 @@ for c_date in [col_tgl_pbck3, col_tgl_back3, col_tgl_ck2]:
     if c_date in df.columns:
         df[c_date] = pd.to_datetime(df[c_date], errors='coerce')
 
-# Filter Bulan Mengacu pada TGL_CK-2
-df['TAHUN_CK2'] = df[col_tgl_ck2].dt.year
-df['BULAN_CK2_ANGKA'] = df[col_tgl_ck2].dt.month
+# Status Penerbitan CK-2 (Dibuat langsung di DF utama agar bebas KeyError)
+if col_ck2 in df.columns:
+    df['STATUS_CK2_BOOL'] = df[col_ck2].apply(
+        lambda x: "TERBIT" if pd.notnull(x) and str(x).strip() != "" and str(x).strip().lower() != "nan" and str(x).strip() != "-" else "PROSES"
+    )
+else:
+    df['STATUS_CK2_BOOL'] = "PROSES"
+
+# Ekstrak Tahun & Bulan CK-2
+if col_tgl_ck2 in df.columns:
+    df['TAHUN_CK2'] = df[col_tgl_ck2].dt.year
+    df['BULAN_CK2_ANGKA'] = df[col_tgl_ck2].dt.month
+else:
+    df['TAHUN_CK2'] = None
+    df['BULAN_CK2_ANGKA'] = None
 
 INDO_BULAN = {
     1: 'Januari', 2: 'Februari', 3: 'Maret', 4: 'April', 5: 'Mei', 6: 'Juni',
@@ -214,9 +226,11 @@ df['BUNGKUS_TMS'] = df['BUNGKUS_TMS'].apply(lambda x: x if x > 0 else 0)
 # ==============================================================================
 st.sidebar.markdown("### 🎛️ Filter Dasbor")
 
+# Filter A: Perusahaan Pabrik
 pabrik_list = ["Semua Pabrik"] + sorted(df[col_pabrik].dropna().unique().tolist())
 selected_pabrik = st.sidebar.selectbox("Pilih Pabrik / Perusahaan:", pabrik_list)
 
+# Filter B: Tahun Berdasarkan Realisasi CK-2
 tahun_tersedia = [2026]
 if df['TAHUN_CK2'].dropna().nunique() > 0:
     tahun_tersedia = sorted(df['TAHUN_CK2'].dropna().unique().astype(int).tolist(), reverse=True)
@@ -262,15 +276,7 @@ elif mode_periode == "Kumulatif (s.d. Bulan)":
 # 7. PERHITUNGAN METRIK EKSEKUTIF
 # ==============================================================================
 total_pbck3 = df_filtered[col_pbck3].nunique() if col_pbck3 in df_filtered.columns else len(df_filtered)
-
-if col_ck2 in df_filtered.columns:
-    df_filtered['STATUS_CK2_BOOL'] = df_filtered[col_ck2].apply(
-        lambda x: "TERBIT" if pd.notnull(x) and str(x).strip() != "" and str(x).strip().lower() != "nan" and str(x).strip() != "-" else "PROSES"
-    )
-    total_ck2 = df_filtered[df_filtered['STATUS_CK2_BOOL'] == "TERBIT"][col_ck2].nunique()
-else:
-    df_filtered['STATUS_CK2_BOOL'] = "PROSES"
-    total_ck2 = 0
+total_ck2 = df_filtered[df_filtered['STATUS_CK2_BOOL'] == "TERBIT"][col_ck2].nunique() if col_ck2 in df_filtered.columns else 0
 
 total_outstanding = total_pbck3 - total_ck2
 persen_selesai = (total_ck2 / total_pbck3 * 100) if total_pbck3 > 0 else 0
@@ -434,28 +440,35 @@ with col_chart1:
     st.subheader("📈 Tren Realisasi CK-2 per Bulan")
     st.caption("Visualisasi volume dokumen yang resmi rampung terbit CK-2 sepanjang tahun.")
     
-    df_trend = df[df['STATUS_CK2_BOOL'] == "TERBIT"].groupby('BULAN_CK2_ANGKA').agg(
-        CK2=(col_ck2, 'nunique')
-    ).reset_index()
+    # Tren Berdasarkan TGL_CK-2 (Aman dari KeyError)
+    df_terbit = df[df['STATUS_CK2_BOOL'] == "TERBIT"].copy()
     
-    df_trend['BULAN'] = df_trend['BULAN_CK2_ANGKA'].map(INDO_BULAN)
-    
-    fig_trend = go.Figure()
-    fig_trend.add_trace(go.Bar(
-        x=df_trend['BULAN'],
-        y=df_trend['CK2'],
-        name='Dokumen CK-2 Terbit',
-        marker_color='#1E3A8A',
-        text=df_trend['CK2'],
-        textposition='auto'
-    ))
-    fig_trend.update_layout(
-        xaxis_title="Bulan Terbit CK-2",
-        yaxis_title="Jumlah Dokumen",
-        height=320,
-        margin=dict(t=15, b=15, l=10, r=10)
-    )
-    st.plotly_chart(fig_trend, use_container_width=True)
+    if not df_terbit.empty and 'BULAN_CK2_ANGKA' in df_terbit.columns:
+        df_trend = df_terbit.dropna(subset=['BULAN_CK2_ANGKA']).groupby('BULAN_CK2_ANGKA').agg(
+            CK2=(col_ck2, 'nunique')
+        ).reset_index()
+        
+        df_trend['BULAN'] = df_trend['BULAN_CK2_ANGKA'].map(INDO_BULAN)
+        df_trend = df_trend.sort_values(by='BULAN_CK2_ANGKA')
+        
+        fig_trend = go.Figure()
+        fig_trend.add_trace(go.Bar(
+            x=df_trend['BULAN'],
+            y=df_trend['CK2'],
+            name='Dokumen CK-2 Terbit',
+            marker_color='#1E3A8A',
+            text=df_trend['CK2'],
+            textposition='auto'
+        ))
+        fig_trend.update_layout(
+            xaxis_title="Bulan Terbit CK-2",
+            yaxis_title="Jumlah Dokumen",
+            height=320,
+            margin=dict(t=15, b=15, l=10, r=10)
+        )
+        st.plotly_chart(fig_trend, use_container_width=True)
+    else:
+        st.info("Belum ada data dokumen CK-2 yang berstatus TERBIT.")
 
 with col_chart2:
     st.subheader("📊 Kontribusi Realisasi Nilai Cukai (CK-2)")
@@ -562,8 +575,10 @@ if not df_display.empty:
 
     df_tabel_rapi = df_display[kolom_final].rename(columns=rename_map)
 
+    # Urutkan berdasarkan Tanggal CK-2 atau Tanggal PBCK-3
+    sort_col = "Tgl CK-2" if "Tgl CK-2" in df_tabel_rapi.columns else "Tgl PBCK-3"
     st.dataframe(
-        df_tabel_rapi.sort_values(by="Tgl CK-2", ascending=False),
+        df_tabel_rapi.sort_values(by=sort_col, ascending=False),
         use_container_width=True,
         hide_index=True
     )
