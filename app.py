@@ -18,13 +18,19 @@ st.markdown("""
     .kpi-card {
         background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px;
         padding: 16px 18px; box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
-        margin-bottom: 12px; transition: transform 0.2s ease, box-shadow 0.2s ease;
+        margin-bottom: 12px; transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+        &:hover { transform: translateY(-3px); box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.1); border-color: transparent; }
     }
-    .border-blue { border-left: 5px solid #1E3A8A; }
-    .border-green { border-left: 5px solid #059669; }
-    .border-amber { border-left: 5px solid #D97706; }
-    .border-slate { border-left: 5px solid #475569; }
-    .border-red { border-left: 5px solid #DC2626; }
+    .kpi-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.1);
+        border-color: transparent;
+    }
+    .border-blue, .border-blue:hover { border-left: 5px solid #1E3A8A; }
+    .border-green, .border-green:hover { border-left: 5px solid #059669; }
+    .border-amber, .border-amber:hover { border-left: 5px solid #D97706; }
+    .border-slate, .border-slate:hover { border-left: 5px solid #475569; }
+    .border-red, .border-red:hover { border-left: 5px solid #DC2626; }
     .kpi-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
     .kpi-label { font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: #64748B; }
     .kpi-icon { font-size: 16px; }
@@ -37,7 +43,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ---- FORMATTER BANNER (Hanya Angka Presisi Agar Bersih) ----
+# ---- FORMATTER BANNER & TABEL (Kompatibel untuk .map Vektorisasi) ----
 def fmt_exact_rp(val):
     if pd.isna(val) or val == 0: return "Rp 0"
     return f"-Rp {abs(val):,.0f}".replace(",", ".") if val < 0 else f"Rp {abs(val):,.0f}".replace(",", ".")
@@ -89,28 +95,30 @@ with col_header:
     </p>
     """, unsafe_allow_html=True)
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300, show_spinner="Memuat Database Realisasi...")
 def load_data():
     sheet_id = "15vLiGh3HzvYPF5Ru_b9ndD2PQKBUrXok"
     url_merge = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
-    xls = pd.ExcelFile(url_merge)
     
-    df_main = pd.read_excel(xls, sheet_name="DATABASE MERGE")
-    df_main.columns = df_main.columns.astype(str).str.strip().str.upper()
-    
-    if "DETAIL" in [s.upper() for s in xls.sheet_names]:
-        sheet_detail_name = next(s for s in xls.sheet_names if s.upper() == "DETAIL")
-        df_detail = pd.read_excel(xls, sheet_name=sheet_detail_name)
-        df_detail.columns = df_detail.columns.astype(str).str.strip().str.upper()
-    else:
-        df_detail = pd.DataFrame()
+    with pd.ExcelFile(url_merge) as xls:
+        df_main = pd.read_excel(xls, sheet_name="DATABASE MERGE")
+        df_main.columns = df_main.columns.astype(str).str.strip().str.upper()
         
+        sheet_map = {s.strip().upper(): s for s in xls.sheet_names}
+        if "DETAIL" in sheet_map:
+            df_detail = pd.read_excel(xls, sheet_name=sheet_map["DETAIL"])
+            df_detail.columns = df_detail.columns.astype(str).str.strip().str.upper()
+            valid_cols = [c for c in df_detail.columns if not c.startswith("UNNAMED")]
+            df_detail = df_detail[valid_cols]
+        else:
+            df_detail = pd.DataFrame()
+            
     return df_main, df_detail
 
 try:
     df_raw, df_detail_raw = load_data()
     df = df_raw.copy()
-    df_detail = df_detail_raw.copy()
+    df_detail = df_detail_raw
 except Exception as e:
     st.error(f"⚠️ Gagal memuat data dari cloud. Error: {e}")
     st.stop()
@@ -134,7 +142,9 @@ for c_date in [col_tgl_pbck3, col_tgl_back3, col_tgl_ck2]:
     if c_date in df.columns: df[c_date] = pd.to_datetime(df[c_date], errors='coerce')
 
 if col_ck2 in df.columns:
-    df['STATUS_CK2_BOOL'] = df[col_ck2].apply(lambda x: "TERBIT" if pd.notnull(x) and str(x).strip() != "" and str(x).strip().lower() != "nan" and str(x).strip() != "-" else "PROSES")
+    s_ck2 = df[col_ck2].astype(str).str.strip().str.lower()
+    df['STATUS_CK2_BOOL'] = "PROSES"
+    df.loc[df[col_ck2].notna() & (~s_ck2.isin(["", "nan", "-"])), 'STATUS_CK2_BOOL'] = "TERBIT"
 else:
     df['STATUS_CK2_BOOL'] = "PROSES"
 
@@ -149,16 +159,17 @@ INDO_BULAN = {1: 'Januari', 2: 'Februari', 3: 'Maret', 4: 'April', 5: 'Mei', 6: 
 df['BULAN_CK2_NAMA'] = df['BULAN_CK2_ANGKA'].map(INDO_BULAN)
 
 def clean_num(series):
+    if pd.api.types.is_numeric_dtype(series):
+        return series.fillna(0)
     def parse_value(x):
         if pd.isna(x): return 0
         if isinstance(x, (int, float)): return x
-        x_str = str(x).replace("Rp", "").strip()
-        x_str = x_str.replace(".", "").replace(",", ".")
+        x_str = str(x).replace("Rp", "").strip().replace(".", "").replace(",", ".")
         try:
             return float(x_str)
         except ValueError:
             return 0
-    return series.apply(parse_value)
+    return series.map(parse_value)
 
 if col_cukai_pbck3 in df.columns: df[col_cukai_pbck3] = clean_num(df[col_cukai_pbck3])
 if col_cukai_ck2 in df.columns: df[col_cukai_ck2] = clean_num(df[col_cukai_ck2])
@@ -166,8 +177,7 @@ if col_biaya_pengganti in df.columns: df[col_biaya_pengganti] = clean_num(df[col
 if col_bks_pbck3 in df.columns: df[col_bks_pbck3] = clean_num(df[col_bks_pbck3])
 if col_bks_ck2 in df.columns: df[col_bks_ck2] = clean_num(df[col_bks_ck2])
 
-df['BUNGKUS_TMS'] = df[col_bks_pbck3] - df[col_bks_ck2]
-df['BUNGKUS_TMS'] = df['BUNGKUS_TMS'].apply(lambda x: x if x > 0 else 0)
+df['BUNGKUS_TMS'] = (df[col_bks_pbck3] - df[col_bks_ck2]).clip(lower=0)
 
 st.sidebar.markdown("### 🎛️ Filter Dasbor")
 pabrik_list = ["Semua Pabrik"] + sorted(df[col_pabrik].dropna().unique().tolist())
@@ -181,13 +191,17 @@ selected_tahun = st.sidebar.selectbox("Pilih Tahun Anggaran:", tahun_tersedia)
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🗓️ Filter Periode Terbit CK-2")
 mode_periode = st.sidebar.radio("Mode Periode:", ["Semua Periode (Total Tahunan)", "Bulanan Tunggal (Single Month)", "Kumulatif (s.d. Bulan)"])
-selected_bulan_nama = "Agustus"
-selected_bulan_angka = 8
+
+# ---- DINAMISASI FILTER WAKTU DEFAULT BERDASARKAN DATETIME.NOW() ----
+current_month_num = datetime.now().month
+selected_bulan_angka = current_month_num
+selected_bulan_nama = INDO_BULAN.get(current_month_num, "Januari")
 list_12_bulan = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember']
 
 if mode_periode != "Semua Periode (Total Tahunan)":
-    selected_bulan_nama = st.sidebar.selectbox("Pilih Bulan CK-2:", list_12_bulan, index=7)
+    selected_bulan_nama = st.sidebar.selectbox("Pilih Bulan CK-2:", list_12_bulan, index=current_month_num - 1)
     selected_bulan_angka = next(k for k, v in INDO_BULAN.items() if v == selected_bulan_nama)
+# --------------------------------------------------------------------
 
 df_filtered = df.copy()
 if selected_pabrik != "Semua Pabrik": df_filtered = df_filtered[df_filtered[col_pabrik] == selected_pabrik]
@@ -207,8 +221,7 @@ selisih_fisik = cukai_pbck3_val - cukai_ck2_val
 biaya_pengganti = df_filtered[col_biaya_pengganti].sum() if col_biaya_pengganti in df_filtered.columns else 0
 total_bks_pbck3 = df_filtered[col_bks_pbck3].sum() if col_bks_pbck3 in df_filtered.columns else 0
 total_bks_ck2 = df_filtered[col_bks_ck2].sum() if col_bks_ck2 in df_filtered.columns else 0
-total_bks_tms = total_bks_pbck3 - total_bks_ck2
-total_bks_tms = total_bks_tms if total_bks_tms > 0 else 0
+total_bks_tms = max(total_bks_pbck3 - total_bks_ck2, 0)
 
 visual_periode_lbl = f"Tahun Anggaran {selected_tahun}"
 if mode_periode == "Bulanan Tunggal (Single Month)": visual_periode_lbl = f"Bulan Realisasi {selected_bulan_nama} {selected_tahun}"
@@ -273,11 +286,14 @@ with col_chart2:
         df_pabrik_grp = df_filtered.groupby(col_pabrik)[col_cukai_ck2].sum().reset_index()
         df_pabrik_grp = df_pabrik_grp[df_pabrik_grp[col_cukai_ck2] > 0].sort_values(by=col_cukai_ck2, ascending=False).head(5)
         if not df_pabrik_grp.empty:
-            # Format Rupiah khusus tooltip Plotly
-            df_pabrik_grp['CUKAI_STR'] = df_pabrik_grp[col_cukai_ck2].apply(lambda x: f"Rp {x:,.0f}".replace(",", "."))
+            df_pabrik_grp['CUKAI_STR'] = df_pabrik_grp[col_cukai_ck2].map(fmt_exact_rp)
             fig_pie = px.pie(df_pabrik_grp, names=col_pabrik, values=col_cukai_ck2, color_discrete_sequence=px.colors.sequential.Blues_r, hole=0.45, custom_data=['CUKAI_STR'])
             fig_pie.update_traces(hovertemplate="<b>%{label}</b><br>Nilai Cukai: %{customdata[0]}<br>Porsi: %{percent}<extra></extra>")
-            fig_pie.update_layout(height=320, margin=dict(t=15, b=15, l=10, r=10))
+            fig_pie.update_layout(
+                height=340,
+                margin=dict(t=15, b=40, l=10, r=10),
+                legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5)
+            )
             st.plotly_chart(fig_pie, use_container_width=True)
         else: st.info("Belum ada realisasi nilai CK-2 pada filter ini.")
     else: st.info("Data belum tersedia untuk grafik kontribusi.")
@@ -316,12 +332,12 @@ if not df_display.empty:
     df_display["TGL_BACK-3_STR"] = df_display[col_tgl_back3].dt.strftime('%d/%m/%Y').fillna("-") if col_tgl_back3 in df_display.columns else "-"
     df_display["TGL_CK-2_STR"] = df_display[col_tgl_ck2].dt.strftime('%d/%m/%Y').fillna("-") if col_tgl_ck2 in df_display.columns else "-"
     
-    df_display["CUKAI_PENGAJUAN"] = df_display[col_cukai_pbck3].apply(lambda x: f"Rp {x:,.0f}".replace(",", ".") if pd.notnull(x) and x != 0 else "Rp 0")
-    df_display["CUKAI_REALISASI_CK2"] = df_display[col_cukai_ck2].apply(lambda x: f"Rp {x:,.0f}".replace(",", ".") if pd.notnull(x) and x != 0 else "Rp 0")
-    df_display["BIAYA_PENGGANTI_STR"] = df_display[col_biaya_pengganti].apply(lambda x: f"Rp {x:,.0f}".replace(",", ".") if pd.notnull(x) and x != 0 else "Rp 0")
-    df_display["BKS_DIAJUKAN"] = df_display[col_bks_pbck3].apply(lambda x: f"{x:,.0f}".replace(",", ".") if pd.notnull(x) and x != 0 else "0")
-    df_display["BKS_DISETUJUI_MS"] = df_display[col_bks_ck2].apply(lambda x: f"{x:,.0f}".replace(",", ".") if pd.notnull(x) and x != 0 else "0")
-    df_display["BKS_DITOLAK_TMS"] = df_display['BUNGKUS_TMS'].apply(lambda x: f"{x:,.0f}".replace(",", ".") if pd.notnull(x) and x != 0 else "0")
+    df_display["CUKAI_PENGAJUAN"] = df_display[col_cukai_pbck3].map(fmt_exact_rp)
+    df_display["CUKAI_REALISASI_CK2"] = df_display[col_cukai_ck2].map(fmt_exact_rp)
+    df_display["BIAYA_PENGGANTI_STR"] = df_display[col_biaya_pengganti].map(fmt_exact_rp)
+    df_display["BKS_DIAJUKAN"] = df_display[col_bks_pbck3].map(fmt_exact_bks)
+    df_display["BKS_DISETUJUI_MS"] = df_display[col_bks_ck2].map(fmt_exact_bks)
+    df_display["BKS_DITOLAK_TMS"] = df_display['BUNGKUS_TMS'].map(fmt_exact_bks)
 
     col_agenda_main = "AGENDA" if "AGENDA" in df_display.columns else df_display.columns[0]
 
@@ -341,8 +357,21 @@ if not df_display.empty:
     df_tabel_rapi = df_display[kolom_final].rename(columns=rename_map)
     df_tabel_rapi = df_tabel_rapi.sort_values(by="Tgl PBCK-3", ascending=False).reset_index(drop=True)
     
+    # ---- STYLING TABEL UTAMA (Uang/Kuantitas Rata Kanan, Teks Rata Kiri) ----
+    kolom_rata_kanan = [
+        "Bks Diajukan", "Bks Disetujui (MS)", "Bks Ditolak (TMS)",
+        "Cukai Diajukan (PBCK-3)", "Realisasi Cukai (CK-2)", "Biaya Pengganti"
+    ]
+    kolom_rata_kiri = [c for c in df_tabel_rapi.columns if c not in kolom_rata_kanan]
+    
+    styled_tabel_utama = (
+        df_tabel_rapi.style
+        .set_properties(subset=kolom_rata_kanan, **{"text-align": "right"})
+        .set_properties(subset=kolom_rata_kiri, **{"text-align": "left"})
+    )
+    
     tabel_event = st.dataframe(
-        df_tabel_rapi, 
+        styled_tabel_utama, 
         use_container_width=True, 
         hide_index=True,
         on_select="rerun",           
@@ -359,50 +388,51 @@ if not df_display.empty:
         
         if not df_detail.empty:
             col_dtl_agenda = "AGENDA" if "AGENDA" in df_detail.columns else df_detail.columns[0]
-            detail_filtered = df_detail[df_detail[col_dtl_agenda].astype(str) == str(selected_agenda)].copy()
+            detail_filtered = df_detail.loc[df_detail[col_dtl_agenda].astype(str) == str(selected_agenda)].copy()
             
             if not detail_filtered.empty:
-                kolom_dibuang = [
+                KOLOM_DIBUANG_SET = {
                     "TOTAL CUKAI PEMBERITAHUAN", "TOTAL CUKAI MS", 
                     "NO", "MOR", "↑ MOR", 
                     "BUNGKUS", "BP SERI I", "BUNGKUS.1", "BP SERI II", 
                     "BUNGKUS.2", "BP SERI III-TP", "BUNGKUS.3", "BP SERI III-DP", 
                     "BUNGKUS.4", "BP SERI MMEA", "TOTAL BP",
                     "JUMLAH MS (BUNGKUS)", "NILAI CUKAI PEMBERITAHUAN", "NILAI CUKAI MS"
-                ]
+                }
                 
                 cols_to_keep = [
                     c for c in detail_filtered.columns 
-                    if not str(c).strip().upper().startswith("UNNAMED") 
-                    and str(c).strip().upper() not in kolom_dibuang
+                    if not c.startswith("UNNAMED") and c not in KOLOM_DIBUANG_SET
                 ]
                 detail_filtered = detail_filtered[cols_to_keep]
 
                 cols = list(detail_filtered.columns)
-                ck2_col = next((c for c in cols if str(c).strip().upper() == "NILAI CK-2"), None)
+                ck2_col = next((c for c in cols if c == "NILAI CK-2"), None)
                 
                 if ck2_col:
                     cols.remove(ck2_col)
-                    insert_idx = len(cols)
-                    for i, c in enumerate(cols):
-                        c_up = str(c).upper()
-                        if "CUKAI" in c_up and "BACK-3" in c_up:
-                            insert_idx = i + 1
-                            break
+                    insert_idx = next(
+                        (i + 1 for i, c in enumerate(cols) if "CUKAI" in c and "BACK-3" in c),
+                        len(cols)
+                    )
                     cols.insert(insert_idx, ck2_col)
-                    detail_filtered = detail_filtered[cols]
-                    detail_filtered = detail_filtered.rename(columns={ck2_col: "NILAI CK-2"})
+                    detail_filtered = detail_filtered[cols].rename(columns={ck2_col: "NILAI CK-2"})
                 
-                for col in detail_filtered.columns:
-                    if pd.api.types.is_numeric_dtype(detail_filtered[col]):
-                        detail_filtered[col] = detail_filtered[col].apply(
-                            lambda x: f"{x:,.0f}".replace(",", ".") if pd.notnull(x) else "0"
-                        )
+                # ---- PEMFORMATAN VEKTORISASI CEPAT (.map) ----
+                num_cols = list(detail_filtered.select_dtypes(include='number').columns)
+                CURRENCY_KEYWORDS = ("CUKAI", "NILAI", "HJE", "TARIF", "BP")
+                
+                for col in num_cols:
+                    col_up = str(col).upper()
+                    if any(k in col_up for k in CURRENCY_KEYWORDS):
+                        detail_filtered[col] = detail_filtered[col].map(fmt_exact_rp)
+                    elif "TAHUN" in col_up:
+                        detail_filtered[col] = detail_filtered[col].map(lambda x: f"{x:.0f}" if pd.notnull(x) else "-")
+                    else:
+                        detail_filtered[col] = detail_filtered[col].map(fmt_exact_bks)
                 
                 if "NILAI CK-2" in detail_filtered.columns and len(detail_filtered) > 1:
-                    vals = detail_filtered["NILAI CK-2"].tolist()
-                    new_vals = [vals[0]] + [""] * (len(vals) - 1)
-                    detail_filtered["NILAI CK-2"] = new_vals
+                    detail_filtered.iloc[1:, detail_filtered.columns.get_loc("NILAI CK-2")] = ""
                 
                 st.dataframe(detail_filtered, use_container_width=True, hide_index=True)
             else:
