@@ -95,7 +95,11 @@ def fmt_kpi_bungkus(val):
 
 LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/1/1a/Logo_Bea_Cukai.png"
 col_logo, col_header = st.columns([1, 8])
-with col_logo: st.image(LOGO_URL, width=78)
+with col_logo:
+    st.markdown(
+        f'<img src="{LOGO_URL}" width="78" referrerpolicy="no-referrer" style="margin-top: 4px;" onerror="this.style.display=\'none\'">',
+        unsafe_allow_html=True
+    )
 with col_header:
     st.markdown("""
     <h2 style='margin-bottom: 2px; color: #1e3a8a; font-weight: 800;'>📊 EXECUTIVE DASHBOARD PBCK-3 & REALISASI CUKAI</h2>
@@ -107,9 +111,8 @@ with col_header:
 
 @st.cache_data(ttl=300, show_spinner="Memuat Database Realisasi...")
 def load_data():
-    # Mengambil ID spreadsheet dari st.secrets atau menggunakan ID konfigurasi aplikasi
-    SHEET_ID = st.secrets.get("SHEET_ID", "MASUKKAN_FILE_ID_SPREADSHEET_ANDA_DI_SINI")
-    url_merge = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
+    sheet_id = "15vLiGh3HzvYPF5Ru_b9ndD2PQKBUrXok"
+    url_merge = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
     
     with pd.ExcelFile(url_merge) as xls:
         df_main = pd.read_excel(xls, sheet_name="DATABASE MERGE")
