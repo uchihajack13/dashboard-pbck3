@@ -1,4 +1,4 @@
-```python
+python
 import re
 import numpy as np
 import streamlit as st
@@ -1570,4 +1570,3 @@ with st.container(border=True):
             st.caption("💡 *Klik pada salah satu baris di tabel atas untuk memunculkan rincian item (Sheet Detail).*")
     else:
         st.info("Tidak ada berkas transaksi pada periode / filter yang dipilih.")
-```
