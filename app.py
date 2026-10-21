@@ -120,6 +120,18 @@ def parse_sisa_hari(series):
         return float(m.group(1)) if m else float('nan')
     return series.map(_extract_days)
 
+def normalize_tahun_pc(val):
+    """Normalisasi nilai Tahun Pita Cukai (misal 2025.0 -> '2025', '2025 & 2026' -> '2025 & 2026')."""
+    if pd.isna(val):
+        return "-"
+    s = re.sub(r'\.0+$', '', str(val).strip())
+    yrs = sorted(set(re.findall(r'20\d{2}', s)))
+    if len(yrs) == 1:
+        return yrs[0]
+    elif len(yrs) > 1:
+        return " & ".join(yrs)
+    return "-" if s.lower() in ["", "nan", "none", "nat", "-", "0"] else s
+
 def fmt_exact_rp(val):
     if pd.isna(val) or val == 0:
         return "Rp 0"
@@ -140,6 +152,16 @@ def fmt_miliar_short(val):
     elif val >= 1_000_000:
         return f"Rp {val/1_000_000:.2f} Jt".replace(".", ",")
     return fmt_exact_rp(val)
+
+def fmt_bks_short(val):
+    if pd.isna(val) or val == 0:
+        return "0 Bks"
+    val = abs(val)
+    if val >= 1_000_000_000:
+        return f"{val/1_000_000_000:.2f} M Bks".replace(".", ",")
+    elif val >= 1_000_000:
+        return f"{val/1_000_000:.2f} Jt Bks".replace(".", ",")
+    return f"{val:,.0f} Bks".replace(",", ".")
 
 def fmt_kpi_rupiah(val):
     if pd.isna(val) or val == 0:
@@ -316,6 +338,108 @@ for c_num in [col_cukai_pbck3, col_cukai_ck2, col_biaya_pengganti, col_bks_pbck3
 df['BUNGKUS_TMS'] = (df[col_bks_pbck3] - df[col_bks_ck2]).clip(lower=0)
 
 # ==============================================================================
+# DETEKSI & INTEGRASI OTOMATIS PARAMETER SEKUNDER: TAHUN PITA CUKAI (TAHUN PC)
+# ==============================================================================
+pc_candidates_main = [
+    c for c in df.columns
+    if any(k in c for k in ["TAHUN_PC", "TAHUN PC", "THN_PC", "THN PC", "TAHUN PITA", "TAHUN_PITA"])
+]
+col_tahun_pc_main = pc_candidates_main[0] if pc_candidates_main else None
+
+if col_tahun_pc_main:
+    df['TAHUN_PC_STR'] = df[col_tahun_pc_main].map(normalize_tahun_pc)
+else:
+    df['TAHUN_PC_STR'] = "-"
+
+# Pemetaan & Agregasi Rincian Item per Tahun PC dari df_detail (Sheet DETAIL)
+if not df_detail.empty:
+    col_dtl_agenda_key = "AGENDA" if "AGENDA" in df_detail.columns else ("NO. AGENDA" if "NO. AGENDA" in df_detail.columns else df_detail.columns[0])
+    col_dtl_pc = next((c for c in df_detail.columns if "TAHUN" in c and ("PC" in c or "PITA" in c)), None)
+    if col_dtl_pc is None:
+        col_dtl_pc = next((c for c in df_detail.columns if c == "TAHUN"), None)
+
+    col_dtl_bks_pbck3 = next((c for c in df_detail.columns if "KEMASAN" in c and "PBCK" in c), None)
+    col_dtl_bks_ms = next((c for c in df_detail.columns if "KEMASAN" in c and "BACK" in c), None)
+    col_dtl_cukai_pbck3 = next((c for c in df_detail.columns if "CUKAI" in c and "PBCK" in c and "TOTAL" not in c and "NILAI" not in c), None)
+    col_dtl_cukai_ms = next((c for c in df_detail.columns if "CUKAI" in c and "BACK" in c), None)
+
+    if col_dtl_pc and all([col_dtl_bks_pbck3, col_dtl_bks_ms, col_dtl_cukai_pbck3, col_dtl_cukai_ms]):
+        dtl_work = df_detail[df_detail[col_dtl_agenda_key] != "-"].copy()
+        dtl_work['_YR_NUM'] = pd.to_numeric(dtl_work[col_dtl_pc], errors='coerce')
+        dtl_work = dtl_work[dtl_work['_YR_NUM'].isin([2025, 2026])].copy()
+        dtl_work['_YR_INT'] = dtl_work['_YR_NUM'].astype(int)
+
+        for c_dnum in [col_dtl_bks_pbck3, col_dtl_bks_ms, col_dtl_cukai_pbck3, col_dtl_cukai_ms]:
+            dtl_work[c_dnum] = clean_num(dtl_work[c_dnum])
+
+        # Hanya hitung baris item aktif yang memiliki nilai kemasan atau cukai > 0
+        dtl_active = dtl_work[(dtl_work[col_dtl_bks_pbck3] > 0) | (dtl_work[col_dtl_cukai_pbck3] > 0) | (dtl_work[col_dtl_cukai_ms] > 0)].copy()
+
+        # Pemetaan label tahun PC dari detail jika di df utama belum terisi
+        dtl_yr_map = (
+            dtl_active.groupby(col_dtl_agenda_key)['_YR_INT']
+            .apply(lambda s: " & ".join(str(y) for y in sorted(set(s))))
+            .to_dict()
+        )
+        mask_missing_pc = df['TAHUN_PC_STR'].isin(["-", "", "nan"])
+        if mask_missing_pc.any():
+            df.loc[mask_missing_pc, 'TAHUN_PC_STR'] = df.loc[mask_missing_pc, col_agenda].map(lambda a: dtl_yr_map.get(a, "-"))
+
+        grp_dtl_pc = dtl_active.groupby([col_dtl_agenda_key, '_YR_INT']).agg(
+            BKS_PBCK3=(col_dtl_bks_pbck3, 'sum'),
+            BKS_MS=(col_dtl_bks_ms, 'sum'),
+            CUKAI_PBCK3=(col_dtl_cukai_pbck3, 'sum'),
+            CUKAI_MS=(col_dtl_cukai_ms, 'sum')
+        ).unstack(fill_value=0.0)
+
+        grp_dtl_pc.columns = [f"_DTL_{m}_{y}" for m, y in grp_dtl_pc.columns]
+        grp_dtl_pc = grp_dtl_pc.reset_index().rename(columns={col_dtl_agenda_key: "_AGENDA_JOIN_KEY"})
+        df = pd.merge(df, grp_dtl_pc, left_on=col_agenda, right_on="_AGENDA_JOIN_KEY", how="left")
+
+for c_init in [
+    "_DTL_BKS_PBCK3_2025", "_DTL_BKS_PBCK3_2026",
+    "_DTL_BKS_MS_2025", "_DTL_BKS_MS_2026",
+    "_DTL_CUKAI_PBCK3_2025", "_DTL_CUKAI_PBCK3_2026",
+    "_DTL_CUKAI_MS_2025", "_DTL_CUKAI_MS_2026"
+]:
+    if c_init not in df.columns:
+        df[c_init] = 0.0
+    df[c_init] = df[c_init].fillna(0.0)
+
+# Rekonsiliasi Presisi Nilai & Bungkus PC 2025 vs PC 2026 per Dokumen agar 100% Akuntabel = Total Dokumen Utama
+for main_col, d25_col, d26_col, out25_col, out26_col in [
+    (col_bks_pbck3, "_DTL_BKS_PBCK3_2025", "_DTL_BKS_PBCK3_2026", "PC2025_BKS_PBCK3", "PC2026_BKS_PBCK3"),
+    (col_bks_ck2, "_DTL_BKS_MS_2025", "_DTL_BKS_MS_2026", "PC2025_BKS_MS", "PC2026_BKS_MS"),
+    (col_cukai_pbck3, "_DTL_CUKAI_PBCK3_2025", "_DTL_CUKAI_PBCK3_2026", "PC2025_CUKAI_PBCK3", "PC2026_CUKAI_PBCK3"),
+    (col_cukai_ck2, "_DTL_CUKAI_MS_2025", "_DTL_CUKAI_MS_2026", "PC2025_CUKAI_MS", "PC2026_CUKAI_MS"),
+]:
+    is_pure_2025 = df['TAHUN_PC_STR'] == "2025"
+    is_pure_2026 = df['TAHUN_PC_STR'] == "2026"
+    has_dtl_split = (df[d25_col] + df[d26_col]) > 0
+    only_dtl_25 = has_dtl_split & (df[d25_col] > 0) & (df[d26_col] == 0)
+    only_dtl_26 = has_dtl_split & (df[d26_col] > 0) & (df[d25_col] == 0)
+    both_dtl = has_dtl_split & (df[d25_col] > 0) & (df[d26_col] > 0)
+
+    # Jika di DATABASE MERGE tertulis murni '2025' atau '2026', prioritaskan label utama;
+    # jika tertulis '2025 & 2026', pecah secara presisi menggunakan angka item dari Sheet DETAIL!
+    df[out25_col] = np.where(
+        is_pure_2025, df[main_col],
+        np.where(is_pure_2026, 0.0, np.where(only_dtl_25, df[main_col], np.where(both_dtl, df[d25_col], 0.0)))
+    )
+    df[out26_col] = np.where(
+        is_pure_2026, df[main_col],
+        np.where(is_pure_2025, 0.0, np.where(only_dtl_26, df[main_col], np.where(both_dtl, df[d26_col], 0.0)))
+    )
+
+# Proporsi Biaya Pengganti (BP) untuk PC 2025 vs PC 2026 berdasarkan proporsi bungkus diajukan
+tot_bks_row = (df['PC2025_BKS_PBCK3'] + df['PC2026_BKS_PBCK3']).replace(0, np.nan)
+df['PC2025_BP'] = (df[col_biaya_pengganti] * (df['PC2025_BKS_PBCK3'] / tot_bks_row)).fillna(0.0)
+df['PC2026_BP'] = (df[col_biaya_pengganti] * (df['PC2026_BKS_PBCK3'] / tot_bks_row)).fillna(0.0)
+
+df['HAS_PC_2025'] = df['TAHUN_PC_STR'].astype(str).str.contains("2025", na=False) | (df['PC2025_BKS_PBCK3'] > 0)
+df['HAS_PC_2026'] = df['TAHUN_PC_STR'].astype(str).str.contains("2026", na=False) | (df['PC2026_BKS_PBCK3'] > 0)
+
+# ==============================================================================
 # ZONA SIDEBAR KIRI GELAP (#1E293B) — PANEL NAVIGASI, TEMA & FILTER EKSEKUTIF
 # ==============================================================================
 with st.sidebar:
@@ -355,6 +479,17 @@ with st.sidebar:
         tahun_tersedia = sorted(df['TAHUN_ACUAN'].dropna().unique().astype(int).tolist(), reverse=True)
     selected_tahun = st.selectbox("📅 Pilih Tahun Anggaran:", tahun_tersedia)
 
+    # FILTER SEKUNDER BARU: Tahun Pita Cukai (PC 2025 vs PC 2026)
+    opsi_tahun_pc = ["Semua Tahun PC (Gabungan)", "Pita Cukai 2025", "Pita Cukai 2026"]
+    extra_pc_years = sorted({
+        y for val in df['TAHUN_PC_STR'].dropna().unique()
+        for y in re.findall(r'20\d{2}', str(val))
+        if y not in ("2025", "2026")
+    })
+    for ey in extra_pc_years:
+        opsi_tahun_pc.append(f"Pita Cukai {ey}")
+    selected_tahun_pc = st.selectbox("🏷️ Tahun Pita Cukai (PC):", opsi_tahun_pc, index=0)
+
     st.markdown("---")
     st.markdown("### 🗓️ Filter Periode CK-2")
     mode_periode = st.radio(
@@ -374,7 +509,7 @@ with st.sidebar:
         selected_bulan_angka = next(k for k, v in INDO_BULAN.items() if v == selected_bulan_nama)
 
 # ==============================================================================
-# INJEKSI CSS DINAMIS: MORNING MODE vs NIGHT MODE + PERBAIKAN KONTRAS DROPDOWN
+# INJEKSI CSS DINAMIS: MORNING MODE vs NIGHT MODE + PERBAIKAN TOMBOL UNDUH CSV
 # ==============================================================================
 if is_night_mode:
     app_bg = "#0B1120"
@@ -394,9 +529,13 @@ if is_night_mode:
     chart_font = "#E2E8F0"
     input_main_bg = "#0F172A"
     input_main_text = "#F8FAFC"
+    input_placeholder = "#94A3B8"
     donut_other_slice = "#334155"
     insight_banner_bg = "rgba(15, 23, 42, 0.72)"
     insight_banner_border = "#334155"
+    pc_mini_bg = "rgba(15, 23, 42, 0.65)"
+    pc_mini_border = "#334155"
+    pc_mini_text = "#E2E8F0"
 else:
     app_bg = "#F4F7FA"
     card_bg = "#FFFFFF"
@@ -415,9 +554,13 @@ else:
     chart_font = "#334155"
     input_main_bg = "#FFFFFF"
     input_main_text = "#0F172A"
+    input_placeholder = "#64748B"
     donut_other_slice = "#CBD5E1"
     insight_banner_bg = "#F8FAFC"
     insight_banner_border = "#E2E8F0"
+    pc_mini_bg = "#F8FAFC"
+    pc_mini_border = "#E2E8F0"
+    pc_mini_text = "#334155"
 
 st.markdown(f"""
 <style>
@@ -545,6 +688,65 @@ section[data-testid="stSidebar"] .stButton > button:hover {{
     box-shadow: 0 6px 16px rgba(37, 99, 235, 0.38) !important;
 }}
 
+/* BAGIAN 1: PERBAIKAN BUG VISUAL TOMBOL UNDUH CSV & KOTAK PENCARIAN DI NIGHT/MORNING MODE */
+div[data-testid="stDownloadButton"] > button {{
+    background: linear-gradient(135deg, #059669 0%, #10B981 100%) !important;
+    color: #FFFFFF !important;
+    border: 1px solid #34D399 !important;
+    border-radius: 8px !important;
+    font-weight: 700 !important;
+    padding: 0.52rem 1rem !important;
+    width: 100% !important;
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.25) !important;
+    transition: all 0.2s ease !important;
+}}
+
+div[data-testid="stDownloadButton"] > button *,
+div[data-testid="stDownloadButton"] > button p,
+div[data-testid="stDownloadButton"] > button span {{
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+    font-weight: 700 !important;
+}}
+
+div[data-testid="stDownloadButton"] > button:hover {{
+    background: linear-gradient(135deg, #047857 0%, #059669 100%) !important;
+    border-color: #6EE7B7 !important;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(16, 185, 129, 0.38) !important;
+}}
+
+div[data-testid="stDownloadButton"] > button:active,
+div[data-testid="stDownloadButton"] > button:focus {{
+    background: linear-gradient(135deg, #047857 0%, #059669 100%) !important;
+    color: #FFFFFF !important;
+}}
+
+/* Perbaikan Kotak Pencarian di Zona 5 agar Kontras di Night Mode & Morning Mode */
+div[data-testid="stTextInput"] div[data-baseweb="input"] {{
+    background-color: {input_main_bg} !important;
+    border: 1.5px solid {card_border} !important;
+    border-radius: 8px !important;
+}}
+
+div[data-testid="stTextInput"] div[data-baseweb="input"]:focus-within {{
+    border-color: #3B82F6 !important;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
+}}
+
+div[data-testid="stTextInput"] input {{
+    background-color: transparent !important;
+    color: {input_main_text} !important;
+    -webkit-text-fill-color: {input_main_text} !important;
+    font-weight: 600 !important;
+}}
+
+div[data-testid="stTextInput"] input::placeholder {{
+    color: {input_placeholder} !important;
+    -webkit-text-fill-color: {input_placeholder} !important;
+    opacity: 1 !important;
+}}
+
 /* Brand Header & SLA Box di Sidebar */
 .sidebar-brand {{
     background: linear-gradient(135deg, rgba(30, 58, 138, 0.75) 0%, rgba(15, 23, 42, 0.95) 100%);
@@ -651,6 +853,12 @@ section[data-testid="stSidebar"] .stButton > button:hover {{
     border-color: #BFDBFE;
 }}
 
+.pill-amber {{
+    background: #FFFBEB;
+    color: #B45309;
+    border-color: #FDE68A;
+}}
+
 /* 4. ZONA 1: 4 Top KPI Cards Berwarna (Gaya Adminty dengan Solid Footer Bar) */
 .adminty-card {{
     background: {card_bg};
@@ -663,7 +871,7 @@ section[data-testid="stSidebar"] .stButton > button:hover {{
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    min-height: 152px;
+    min-height: 156px;
 }}
 
 .adminty-card:hover {{
@@ -704,7 +912,19 @@ section[data-testid="stSidebar"] .stButton > button:hover {{
     font-size: 11px;
     font-weight: 600;
     color: {text_secondary};
-    margin-top: 4px;
+    margin-top: 5px;
+}}
+
+.pc-mini-badge {{
+    display: inline-block;
+    background: {pc_mini_bg};
+    border: 1px solid {pc_mini_border};
+    color: {pc_mini_text};
+    padding: 2px 7px;
+    border-radius: 6px;
+    font-size: 10.5px;
+    font-weight: 700;
+    margin-top: 2px;
 }}
 
 .adminty-icon-circle {{
@@ -743,7 +963,7 @@ section[data-testid="stSidebar"] .stButton > button:hover {{
     background: {card_bg};
     border: 1px solid {card_border};
     border-radius: 12px;
-    padding: 15px 18px;
+    padding: 14px 18px;
     margin-bottom: 12px;
     box-shadow: 0 2px 10px rgba(15, 23, 42, 0.04);
     display: flex;
@@ -787,8 +1007,20 @@ section[data-testid="stSidebar"] .stButton > button:hover {{
     margin-top: 4px;
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 5px;
     align-items: center;
+}}
+
+.fin-pc-strip {{
+    font-size: 10.5px;
+    font-weight: 700;
+    color: {pc_mini_text};
+    background: {pc_mini_bg};
+    border: 1px solid {pc_mini_border};
+    border-radius: 6px;
+    padding: 2px 7px;
+    margin-top: 4px;
+    display: inline-block;
 }}
 
 .fin-icon-box {{
@@ -854,6 +1086,13 @@ section[data-testid="stSidebar"] .stButton > button:hover {{
     margin-top: 5px;
 }}
 
+.progress-pc-sub {{
+    font-size: 10.5px;
+    font-weight: 700;
+    color: {text_secondary};
+    margin-top: 3px;
+}}
+
 /* Executive Insight Banner di Bawah Donut Chart (Zona 4) */
 .donut-insight-strip {{
     background: {insight_banner_bg};
@@ -880,14 +1119,6 @@ div[data-testid="stVerticalBlockBorderWrapper"] {{
     padding: 6px !important;
 }}
 
-/* Kotak Pencarian di Area Utama */
-div[data-testid="stTextInput"] input {{
-    background-color: {input_main_bg} !important;
-    color: {input_main_text} !important;
-    border: 1px solid {card_border} !important;
-    border-radius: 8px !important;
-}}
-
 /* Badges Universal */
 .badge-success {{ background-color: #ECFDF5; color: #047857; padding: 2px 8px; border-radius: 9999px; font-size: 10.5px; font-weight: 700; }}
 .badge-warning {{ background-color: #FFFBEB; color: #B45309; padding: 2px 8px; border-radius: 9999px; font-size: 10.5px; font-weight: 700; }}
@@ -910,9 +1141,39 @@ div[data-testid="stTextInput"] input {{
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# BAGIAN 1: PEMISAHAN FILTER PERIODE GLOBAL (df_period_all) VS ENTITAS PABRIK (df_filtered)
+# FUNGSI HELPER FILTER TAHUN PITA CUKAI (MENYESUAIKAN NILAI JIKA FILTER PC AKTIF)
 # ==============================================================================
-# 1. Buat df_period_all yang HANYA difilter berdasarkan Periode Waktu aktif (mencakup SEMUA PABRIK)
+def apply_tahun_pc_filter(df_in, pc_choice):
+    """
+    Jika pengguna memilih 'Pita Cukai 2025' atau 'Pita Cukai 2026', saring dokumen yang
+    memiliki pita cukai tahun tersebut dan sesuaikan kolom nilai/bungkus pada dokumen
+    gabungan ('2025 & 2026') agar metrik mencerminkan 100% porsi tahun PC yang dipilih!
+    """
+    out = df_in.copy()
+    if pc_choice == "Pita Cukai 2025":
+        out = out[out['HAS_PC_2025']].copy()
+        out[col_bks_pbck3] = out['PC2025_BKS_PBCK3']
+        out[col_bks_ck2] = out['PC2025_BKS_MS']
+        out[col_cukai_pbck3] = out['PC2025_CUKAI_PBCK3']
+        out[col_cukai_ck2] = out['PC2025_CUKAI_MS']
+        out[col_biaya_pengganti] = out['PC2025_BP']
+        out['BUNGKUS_TMS'] = (out[col_bks_pbck3] - out[col_bks_ck2]).clip(lower=0)
+    elif pc_choice == "Pita Cukai 2026":
+        out = out[out['HAS_PC_2026']].copy()
+        out[col_bks_pbck3] = out['PC2026_BKS_PBCK3']
+        out[col_bks_ck2] = out['PC2026_BKS_MS']
+        out[col_cukai_pbck3] = out['PC2026_CUKAI_PBCK3']
+        out[col_cukai_ck2] = out['PC2026_CUKAI_MS']
+        out[col_biaya_pengganti] = out['PC2026_BP']
+        out['BUNGKUS_TMS'] = (out[col_bks_pbck3] - out[col_bks_ck2]).clip(lower=0)
+    elif pc_choice != "Semua Tahun PC (Gabungan)":
+        yr_target = pc_choice.replace("Pita Cukai", "").strip()
+        out = out[out['TAHUN_PC_STR'].astype(str).str.contains(yr_target, na=False)].copy()
+    return out
+
+# ==============================================================================
+# BAGIAN 1 & 2: PEMISAHAN FILTER PERIODE GLOBAL (df_period_all) VS ENTITAS PABRIK (df_filtered)
+# ==============================================================================
 df_period_all = df.copy()
 is_terbit_all = df_period_all['STATUS_CK2_BOOL'] == "TERBIT"
 is_proses_all = df_period_all['STATUS_CK2_BOOL'] == "PROSES"
@@ -936,7 +1197,10 @@ elif mode_periode == "Kumulatif (s.d. Bulan)":
     )
     df_period_all = df_period_all[cond_terbit_all | cond_proses_all]
 
-# 2. Hitung Grand Total KPPBC & Tabel Peringkat Pabrik dari df_period_all
+# Terapkan filter sekunder Tahun Pita Cukai pada df_period_all
+df_period_all = apply_tahun_pc_filter(df_period_all, selected_tahun_pc)
+
+# Hitung Grand Total KPPBC & Tabel Peringkat Pabrik dari df_period_all
 grand_total_cukai_ck2 = df_period_all[col_cukai_ck2].sum() if col_cukai_ck2 in df_period_all.columns else 0
 df_period_terbit_all = df_period_all[df_period_all['STATUS_CK2_BOOL'] == "TERBIT"]
 grand_total_dok_ck2 = df_period_terbit_all[df_period_terbit_all[col_ck2] != "-"][col_ck2].nunique() if col_ck2 in df_period_all.columns else 0
@@ -958,14 +1222,14 @@ else:
 
 total_pabrik_aktif_periode = len(df_all_pabrik_rank)
 
-# 3. Buat df_filtered untuk Entitas Pabrik Terpilih
+# Buat df_filtered untuk Entitas Pabrik Terpilih
 if selected_pabrik != "Semua Pabrik":
     df_filtered = df_period_all[df_period_all[col_pabrik].astype(str).str.strip() == selected_pabrik].copy()
 else:
     df_filtered = df_period_all.copy()
 
 # ==============================================================================
-# PERHITUNGAN METRIK EKSEKUTIF & KECEPATAN LAYANAN (TGL_CK-2 DIKURANGI TANGGAL_BACK-3)
+# PERHITUNGAN METRIK EKSEKUTIF, BREAKDOWN PC 2025 vs 2026 & KECEPATAN LAYANAN
 # ==============================================================================
 valid_agenda = df_filtered[df_filtered[col_agenda] != "-"][col_agenda] if col_agenda in df_filtered.columns else pd.Series(dtype='str')
 valid_pbck3 = df_filtered[df_filtered[col_pbck3] != "-"][col_pbck3] if col_pbck3 in df_filtered.columns else pd.Series(dtype='str')
@@ -977,7 +1241,33 @@ total_outstanding = int((df_filtered['STATUS_CK2_BOOL'] == "PROSES").sum())
 persen_selesai = (total_ck2 / total_pbck3 * 100) if total_pbck3 > 0 else 0.0
 persen_outstanding = (total_outstanding / total_pbck3 * 100) if total_pbck3 > 0 else 0.0
 
-# Perhitungan Kecepatan Layanan (SLA Speed): Murni dari TANGGAL_BACK-3 ke TGL_CK-2 (Bukan dari PBCK-3)
+# Breakdown Dokumen per Tahun PC (2025 vs 2026 vs Gabungan 2025 & 2026)
+if selected_tahun_pc == "Pita Cukai 2025":
+    pbck3_pc2025 = total_pbck3
+    pbck3_pc2026 = 0
+    pbck3_pc_mix = 0
+    ck2_pc2025 = total_ck2
+    ck2_pc2026 = 0
+    ck2_pc_mix = 0
+elif selected_tahun_pc == "Pita Cukai 2026":
+    pbck3_pc2025 = 0
+    pbck3_pc2026 = total_pbck3
+    pbck3_pc_mix = 0
+    ck2_pc2025 = 0
+    ck2_pc2026 = total_ck2
+    ck2_pc_mix = 0
+else:
+    pbck3_pc2025 = int((df_filtered['TAHUN_PC_STR'] == "2025").sum())
+    pbck3_pc2026 = int((df_filtered['TAHUN_PC_STR'] == "2026").sum())
+    pbck3_pc_mix = int((df_filtered['TAHUN_PC_STR'] == "2025 & 2026").sum())
+    ck2_pc2025 = int((df_terbit_filtered['TAHUN_PC_STR'] == "2025").sum())
+    ck2_pc2026 = int((df_terbit_filtered['TAHUN_PC_STR'] == "2026").sum())
+    ck2_pc_mix = int((df_terbit_filtered['TAHUN_PC_STR'] == "2025 & 2026").sum())
+
+mix_pbck3_lbl = f" (+{pbck3_pc_mix} Mix)" if pbck3_pc_mix > 0 else ""
+mix_ck2_lbl = f" (+{ck2_pc_mix} Mix)" if ck2_pc_mix > 0 else ""
+
+# Perhitungan Kecepatan Layanan (SLA Speed): Murni dari TANGGAL_BACK-3 ke TGL_CK-2
 avg_sla_val = None
 avg_sla_hk_val = None
 avg_sla_num_str = "-"
@@ -1006,6 +1296,36 @@ cukai_ck2_val = df_filtered[col_cukai_ck2].sum() if col_cukai_ck2 in df_filtered
 selisih_fisik = cukai_pbck3_val - cukai_ck2_val
 biaya_pengganti = df_filtered[col_biaya_pengganti].sum() if col_biaya_pengganti in df_filtered.columns else 0
 
+total_bks_pbck3 = df_filtered[col_bks_pbck3].sum() if col_bks_pbck3 in df_filtered.columns else 0
+total_bks_ck2 = df_filtered[col_bks_ck2].sum() if col_bks_ck2 in df_filtered.columns else 0
+total_bks_tms = max(total_bks_pbck3 - total_bks_ck2, 0)
+
+# Breakdown Nilai Rupiah & Kemasan Bungkus untuk PC 2025 vs PC 2026 (dari item Sheet DETAIL + Dokumen)
+if selected_tahun_pc == "Pita Cukai 2025":
+    val_pbck3_2025, val_pbck3_2026 = cukai_pbck3_val, 0.0
+    val_ck2_2025, val_ck2_2026 = cukai_ck2_val, 0.0
+    bks_pbck3_2025, bks_pbck3_2026 = total_bks_pbck3, 0.0
+    bks_ms_2025, bks_ms_2026 = total_bks_ck2, 0.0
+elif selected_tahun_pc == "Pita Cukai 2026":
+    val_pbck3_2025, val_pbck3_2026 = 0.0, cukai_pbck3_val
+    val_ck2_2025, val_ck2_2026 = 0.0, cukai_ck2_val
+    bks_pbck3_2025, bks_pbck3_2026 = 0.0, total_bks_pbck3
+    bks_ms_2025, bks_ms_2026 = 0.0, total_bks_ck2
+else:
+    val_pbck3_2025 = df_filtered['PC2025_CUKAI_PBCK3'].sum()
+    val_pbck3_2026 = df_filtered['PC2026_CUKAI_PBCK3'].sum()
+    val_ck2_2025 = df_filtered['PC2025_CUKAI_MS'].sum()
+    val_ck2_2026 = df_filtered['PC2026_CUKAI_MS'].sum()
+    bks_pbck3_2025 = df_filtered['PC2025_BKS_PBCK3'].sum()
+    bks_pbck3_2026 = df_filtered['PC2026_BKS_PBCK3'].sum()
+    bks_ms_2025 = df_filtered['PC2025_BKS_MS'].sum()
+    bks_ms_2026 = df_filtered['PC2026_BKS_MS'].sum()
+
+persen_pbck3_2025 = (val_pbck3_2025 / cukai_pbck3_val * 100) if cukai_pbck3_val > 0 else 0.0
+persen_pbck3_2026 = (val_pbck3_2026 / cukai_pbck3_val * 100) if cukai_pbck3_val > 0 else 0.0
+persen_ck2_2025 = (val_ck2_2025 / cukai_ck2_val * 100) if cukai_ck2_val > 0 else 0.0
+persen_ck2_2026 = (val_ck2_2026 / cukai_ck2_val * 100) if cukai_ck2_val > 0 else 0.0
+
 # Perhitungan Porsi Kontribusi & Ranking Pabrik Terpilih terhadap Grand Total KPPBC
 val_selected = cukai_ck2_val
 val_others = max(grand_total_cukai_ck2 - val_selected, 0)
@@ -1020,10 +1340,6 @@ if selected_pabrik != "Semua Pabrik" and not df_all_pabrik_rank.empty:
     if not match_rank.empty:
         selected_rank_int = int(match_rank['RANK'].iloc[0])
 
-total_bks_pbck3 = df_filtered[col_bks_pbck3].sum() if col_bks_pbck3 in df_filtered.columns else 0
-total_bks_ck2 = df_filtered[col_bks_ck2].sum() if col_bks_ck2 in df_filtered.columns else 0
-total_bks_tms = max(total_bks_pbck3 - total_bks_ck2, 0)
-
 rasio_bks_ms = (total_bks_ck2 / total_bks_pbck3 * 100) if total_bks_pbck3 > 0 else 0.0
 rasio_bks_tms = (total_bks_tms / total_bks_pbck3 * 100) if total_bks_pbck3 > 0 else 0.0
 
@@ -1032,6 +1348,12 @@ if mode_periode == "Bulanan Tunggal (Single Month)":
     visual_periode_lbl = f"Bulan {selected_bulan_nama} {selected_tahun}"
 elif mode_periode == "Kumulatif (s.d. Bulan)":
     visual_periode_lbl = f"s.d. Bulan {selected_bulan_nama} {selected_tahun}"
+
+visual_pc_pill_lbl = (
+    "PC: Semua Tahun (2025 & 2026)"
+    if selected_tahun_pc == "Semua Tahun PC (Gabungan)"
+    else f"PC: {selected_tahun_pc.replace('Pita Cukai ', 'Tahun ')}"
+)
 
 # Ringkasan Cepat SLA & Tombol Refresh di Bawah Sidebar
 with st.sidebar:
@@ -1076,13 +1398,14 @@ st.markdown(f"""
     </div>
     <div class="header-pills">
         <span class="status-pill pill-blue">🗓️ {visual_periode_lbl}</span>
+        <span class="status-pill pill-amber">🏷️ {visual_pc_pill_lbl}</span>
         <span class="status-pill">🏢 {selected_pabrik}</span>
         {rekon_pill_html}
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# ZONA 1: st.columns(4) untuk 4 Kartu KPI Utama bergaya Adminty
+# ZONA 1: st.columns(4) untuk 4 Kartu KPI Utama bergaya Adminty + Mini-Breakdown Tahun PC
 z1_c1, z1_c2, z1_c3, z1_c4 = st.columns(4)
 
 with z1_c1:
@@ -1092,7 +1415,7 @@ with z1_c1:
             <div>
                 <div class="adminty-title">Permohonan PBCK-3 Terlayani</div>
                 <div class="adminty-value">{total_pbck3:,.0f} <span class="adminty-unit">Berkas</span></div>
-                <div class="adminty-subnote">Dokumen pemberitahuan masuk</div>
+                <div class="adminty-subnote"><span class="pc-mini-badge">🏷️ PC 2025: {pbck3_pc2025} | PC 2026: {pbck3_pc2026}{mix_pbck3_lbl}</span></div>
             </div>
             <div class="adminty-icon-circle icon-orange">📥</div>
         </div>
@@ -1110,7 +1433,7 @@ with z1_c2:
             <div>
                 <div class="adminty-title">Realisasi CK-2 Terbit</div>
                 <div class="adminty-value">{total_ck2:,.0f} <span class="adminty-unit">Dokumen</span></div>
-                <div class="adminty-subnote">Pengembalian cukai selesai</div>
+                <div class="adminty-subnote"><span class="pc-mini-badge">🏷️ PC 2025: {ck2_pc2025} | PC 2026: {ck2_pc2026}{mix_ck2_lbl}</span></div>
             </div>
             <div class="adminty-icon-circle icon-emerald">📜</div>
         </div>
@@ -1173,12 +1496,12 @@ with col_main_chart:
         st.markdown(f"""
         <div style="padding: 6px 10px 0 10px;">
             <div class="section-title">📈 Tren Realisasi CK-2 per Bulan ({selected_tahun})</div>
-            <div class="section-caption">Visualisasi volume dokumen CK-2 terbit & nilai realisasi cukai (MS) berdasarkan bulan terbit CK-2 — Entitas: <b>{selected_pabrik}</b></div>
+            <div class="section-caption">Visualisasi volume dokumen CK-2 terbit & nilai realisasi cukai (MS) — Entitas: <b>{selected_pabrik}</b> | <b>{visual_pc_pill_lbl}</b></div>
         </div>
         """, unsafe_allow_html=True)
 
-        # BUG FIX #4 & TANGGAL: Sinkronkan Grafik Tren Bulanan dengan Filter Pabrik & Tahun + Urutan Kronologis Bulan
-        df_terbit_trend = df[df['STATUS_CK2_BOOL'] == "TERBIT"].copy()
+        # BUG FIX #4 & TANGGAL: Sinkronkan Grafik Tren Bulanan dengan Filter Pabrik, Tahun & Tahun PC
+        df_terbit_trend = apply_tahun_pc_filter(df[df['STATUS_CK2_BOOL'] == "TERBIT"].copy(), selected_tahun_pc)
         if selected_pabrik != "Semua Pabrik":
             df_terbit_trend = df_terbit_trend[df_terbit_trend[col_pabrik].astype(str).str.strip() == selected_pabrik]
         if 'TAHUN_CK2' in df_terbit_trend.columns:
@@ -1250,14 +1573,14 @@ with col_main_chart:
                     tickfont=dict(color=chart_font)
                 ),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color=chart_font)),
-                height=340,
+                height=355,
                 margin=dict(t=28, b=10, l=10, r=10)
             )
             st.plotly_chart(fig_trend, use_container_width=True)
         else:
             st.info("Belum ada data dokumen CK-2 yang berstatus TERBIT pada filter pabrik/tahun ini.")
 
-# BAGIAN 3: KARTU FINANSIAL KANAN (ZONA 2) DENGAN BADGE PORSI KONTRIBUSI
+# ZONA 2 KANAN: 3 KARTU FINANSIAL DENGAN BREAKDOWN PC 2025 vs PC 2026 & BADGE PORSI
 with col_side_kpis:
     badge_cukai_side = (
         f'<span class="badge-danger">Selisih TMS: {fmt_exact_rp(-selisih_fisik)}</span>'
@@ -1265,9 +1588,16 @@ with col_side_kpis:
         else '<span class="badge-success">100% Memenuhi Syarat</span>'
     )
     badge_share_side = (
-        f'&nbsp;<span class="badge-info">📊 Kontribusi: {porsi_persen_str}% Total KPPBC</span>'
+        f'<span class="badge-info">📊 Kontribusi: {porsi_persen_str}% Total KPPBC</span>'
         if (selected_pabrik != "Semua Pabrik" and grand_total_cukai_ck2 > 0)
         else ""
+    )
+
+    pc_pbck3_strip_html = (
+        f"<div class='fin-pc-strip'>🏷️ PC 2025: {fmt_miliar_short(val_pbck3_2025)} ({persen_pbck3_2025:.1f}%) &bull; PC 2026: {fmt_miliar_short(val_pbck3_2026)} ({persen_pbck3_2026:.1f}%)</div>"
+    )
+    pc_ck2_strip_html = (
+        f"<div class='fin-pc-strip'>🏷️ PC 2025: {fmt_miliar_short(val_ck2_2025)} ({persen_ck2_2025:.1f}%) &bull; PC 2026: {fmt_miliar_short(val_ck2_2026)} ({persen_ck2_2026:.1f}%)</div>"
     )
 
     st.markdown(f"""
@@ -1275,7 +1605,7 @@ with col_side_kpis:
         <div>
             <div class="fin-label">Nilai Pengajuan (PBCK-3)</div>
             <div class="fin-val">{fmt_kpi_rupiah(cukai_pbck3_val)}</div>
-            <div class="fin-sub">Potensi nilai cukai pemberitahuan</div>
+            {pc_pbck3_strip_html}
         </div>
         <div class="fin-icon-box box-blue">📋</div>
     </div>
@@ -1285,6 +1615,7 @@ with col_side_kpis:
             <div class="fin-label" style="color: {fin_green_text};">Realisasi Cukai CK-2 (MS)</div>
             <div class="fin-val" style="color: {fin_green_text};">{fmt_kpi_rupiah(cukai_ck2_val)}</div>
             <div class="fin-sub">{badge_cukai_side}{badge_share_side}</div>
+            {pc_ck2_strip_html}
         </div>
         <div class="fin-icon-box box-emerald">💸</div>
     </div>
@@ -1300,7 +1631,7 @@ with col_side_kpis:
     """, unsafe_allow_html=True)
 
 # ==============================================================================
-# ZONA 3: HORIZONTAL PROGRESS BAR STRIP (GAYA ADMINDEK — 4 KOLOM)
+# ZONA 3: HORIZONTAL PROGRESS BAR STRIP (GAYA ADMINDEK — 4 KOLOM + RINCIAN PC)
 # ==============================================================================
 with st.container(border=True):
     z3_c1, z3_c2, z3_c3, z3_c4 = st.columns(4)
@@ -1317,6 +1648,7 @@ with st.container(border=True):
                 <span>Basis Pemberitahuan Fisik</span>
                 <span>100%</span>
             </div>
+            <div class="progress-pc-sub">🏷️ PC 2025: {fmt_bks_short(bks_pbck3_2025)} &bull; PC 2026: {fmt_bks_short(bks_pbck3_2026)}</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -1333,6 +1665,7 @@ with st.container(border=True):
                 <span>Memenuhi Syarat Pengembalian</span>
                 <span style="color:#10B981; font-weight:700;">{rasio_bks_ms:.1f}%</span>
             </div>
+            <div class="progress-pc-sub">🏷️ PC 2025: {fmt_bks_short(bks_ms_2025)} &bull; PC 2026: {fmt_bks_short(bks_ms_2026)}</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -1349,6 +1682,7 @@ with st.container(border=True):
                 <span>{'Tidak Mendapat Pengembalian' if total_bks_tms > 0 else 'Nihil Selisih (0 Bks)'}</span>
                 <span style="color:#F43F5E; font-weight:700;">{rasio_bks_tms:.1f}%</span>
             </div>
+            <div class="progress-pc-sub">Selisih Pemeriksaan Fisik BACK-3</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -1365,6 +1699,7 @@ with st.container(border=True):
                 <span>Rasio Terbit CK-2 vs PBCK-3</span>
                 <span style="color:#06B6D4; font-weight:700;">{persen_selesai:.1f}%</span>
             </div>
+            <div class="progress-pc-sub">🏷️ Terbit PC 2025: {ck2_pc2025} Dok &bull; PC 2026: {ck2_pc2026} Dok{mix_ck2_lbl}</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -1377,7 +1712,6 @@ col_donut, col_sla_radar = st.columns([4.5, 5.5])
 
 with col_donut:
     with st.container(border=True):
-        # BAGIAN 2: UPGRADE DONUT CHART ZONA 4 MENJADI ADAPTIF 2 MODE
         if selected_pabrik == "Semua Pabrik":
             # MODE A — Semua Pabrik: Top 5 Pabrik + Pabrik Lainnya (Gabungan) = 100% Grand Total KPPBC
             st.markdown("""
@@ -1483,7 +1817,6 @@ with col_donut:
                     else f"Belum Ada Realisasi ({total_pabrik_aktif_periode} Pabrik Aktif)"
                 )
 
-                # Executive Insight Banner di Bawah Donut Chart
                 st.markdown(f"""
                 <div class="donut-insight-strip">
                     <span>🏆 <b>Peringkat:</b> {rank_label_str}</span>
@@ -1584,6 +1917,7 @@ with st.container(border=True):
             col_pabrik: "Perusahaan",
             col_pbck3: "No. PBCK-3",
             "TGL_PBCK-3_STR": "Tgl PBCK-3",
+            "TAHUN_PC_STR": "Tahun PC",
             "BKS_DIAJUKAN": "Bks Diajukan",
             "BKS_DISETUJUI_MS": "Bks Disetujui (MS)",
             "BKS_DITOLAK_TMS": "Bks Ditolak (TMS)",
@@ -1596,7 +1930,7 @@ with st.container(border=True):
             "TGL_CK-2_STR": "Tgl CK-2"
         }
         kolom_final = [
-            col_agenda_main, col_pabrik, col_pbck3, "TGL_PBCK-3_STR",
+            col_agenda_main, col_pabrik, col_pbck3, "TGL_PBCK-3_STR", "TAHUN_PC_STR",
             "BKS_DIAJUKAN", "BKS_DISETUJUI_MS", "BKS_DITOLAK_TMS",
             "CUKAI_PENGAJUAN", "CUKAI_REALISASI_CK2", "BIAYA_PENGGANTI_STR",
             col_back3, "TGL_BACK-3_STR", col_ck2, "TGL_CK-2_STR"
@@ -1607,7 +1941,7 @@ with st.container(border=True):
         with col_search:
             search_query = st.text_input(
                 "🔍 Cari",
-                placeholder="🔍 Cari Pabrik / No. PBCK-3 / BACK-3 / CK-2 / Agenda...",
+                placeholder="🔍 Cari Pabrik / No. PBCK-3 / BACK-3 / CK-2 / Agenda / Tahun PC...",
                 label_visibility="collapsed"
             )
 
@@ -1617,6 +1951,7 @@ with st.container(border=True):
                 df_tabel_rapi["Perusahaan"].astype(str).str.contains(q_str, case=False, na=False)
                 | df_tabel_rapi["Agenda"].astype(str).str.contains(q_str, case=False, na=False)
                 | df_tabel_rapi["No. PBCK-3"].astype(str).str.contains(q_str, case=False, na=False)
+                | df_tabel_rapi["Tahun PC"].astype(str).str.contains(q_str, case=False, na=False)
                 | df_tabel_rapi["No. BACK-3"].astype(str).str.contains(q_str, case=False, na=False)
                 | df_tabel_rapi["No. CK-2"].astype(str).str.contains(q_str, case=False, na=False)
             )
@@ -1648,6 +1983,7 @@ with st.container(border=True):
             "Perusahaan": st.column_config.TextColumn("Perusahaan", width="medium"),
             "No. PBCK-3": st.column_config.TextColumn("No. PBCK-3", width="medium"),
             "Tgl PBCK-3": st.column_config.TextColumn("Tgl PBCK-3", width="small"),
+            "Tahun PC": st.column_config.TextColumn("Tahun PC", width="small"),
             "Bks Diajukan": st.column_config.TextColumn("Bks Diajukan", width="small"),
             "Bks Disetujui (MS)": st.column_config.TextColumn("Bks Disetujui (MS)", width="small"),
             "Bks Ditolak (TMS)": st.column_config.TextColumn("Bks Ditolak (TMS)", width="small"),
@@ -1675,7 +2011,8 @@ with st.container(border=True):
             if idx < len(df_tabel_rapi):
                 selected_agenda = df_tabel_rapi.iloc[idx]["Agenda"]
                 selected_pbck3 = df_tabel_rapi.iloc[idx]["No. PBCK-3"]
-                st.markdown(f"#### 🔍 Rincian Item untuk Dokumen: `{selected_pbck3}` (Agenda: `{selected_agenda}`)")
+                selected_pc_row = df_tabel_rapi.iloc[idx]["Tahun PC"]
+                st.markdown(f"#### 🔍 Rincian Item untuk Dokumen: `{selected_pbck3}` (Agenda: `{selected_agenda}` | Tahun PC: `{selected_pc_row}`)")
 
                 if not df_detail.empty:
                     col_dtl_agenda = "AGENDA" if "AGENDA" in df_detail.columns else ("NO. AGENDA" if "NO. AGENDA" in df_detail.columns else df_detail.columns[0])
