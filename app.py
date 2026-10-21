@@ -72,11 +72,7 @@ def parse_indo_date(series):
     BUG FIX KRITIS TANGGAL, GRAFIK BULANAN & SLA:
     Di Excel DATABASE MERGE, kolom TGL_CK-2 berisi campuran objek datetime.datetime
     (PPK26-001 s.d. PPK26-097) dan teks Bahasa Indonesia '19 Oktober 2026' (PPK26-098).
-    Pada kode lama, series.astype(str) mengubah datetime(2026, 5, 7) menjadi string ISO
-    '2026-05-07 00:00:00', lalu pd.to_datetime(..., dayfirst=True) membalik Bulan 05 dan
-    Hari 07 menjadi 5 Juli (serta 2026-06-02 menjadi 6 Februari, 2026-09-01 menjadi 9 Januari,
-    2026-06-11 menjadi 6 November, 2026-06-12 menjadi 6 Desember) dan membuat tanggal >=13 menjadi NaT!
-    Fungsi di bawah ini memeriksa setiap sel secara presisi:
+    Fungsi ini memeriksa setiap sel secara presisi:
     1. Jika sudah berupa objek datetime/Timestamp asli, langsung dikembalikan tanpa diubah ke string.
     2. Jika berupa string berformat ISO YYYY-MM-DD, wajib di-parse dengan dayfirst=False.
     3. Jika berupa teks Bahasa Indonesia ('19 Oktober 2026'), diterjemahkan dan di-parse dengan dayfirst=True.
@@ -98,7 +94,6 @@ def parse_indo_date(series):
         s = str(val).strip()
         if not s or s.lower() in ["nan", "none", "nat", "-", "0", "belum", "proses"]:
             return pd.NaT
-        # Deteksi format ISO YYYY-MM-DD (misal '2026-05-07' atau '2026-05-07 00:00:00')
         m_iso = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})', s)
         if m_iso:
             return pd.Timestamp(int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3)))
@@ -137,11 +132,13 @@ def fmt_exact_bks(val):
 
 def fmt_miliar_short(val):
     if pd.isna(val) or val == 0:
-        return ""
-    if val >= 1_000_000_000:
+        return "Rp 0"
+    if val >= 1_000_000_000_000:
+        return f"Rp {val/1_000_000_000_000:.2f} T".replace(".", ",")
+    elif val >= 1_000_000_000:
         return f"Rp {val/1_000_000_000:.2f} M".replace(".", ",")
     elif val >= 1_000_000:
-        return f"Rp {val/1_000_000:.1f} Jt".replace(".", ",")
+        return f"Rp {val/1_000_000:.2f} Jt".replace(".", ",")
     return fmt_exact_rp(val)
 
 def fmt_kpi_rupiah(val):
@@ -259,6 +256,10 @@ if col_pabrik in df.columns:
     s_pab = df[col_pabrik].astype(str).str.strip()
     mask_valid_row |= (~df[col_pabrik].isna() & ~s_pab.str.lower().isin(["", "nan", "none", "-"]))
 df = df[mask_valid_row].copy()
+
+# Normalisasi spasi nama perusahaan agar pengelompokan & ranking konsisten
+if col_pabrik in df.columns:
+    df[col_pabrik] = df[col_pabrik].astype(str).str.strip()
 
 # Konversi Kolom Tanggal (Bebas Bug Swap Bulan/Hari ISO)
 for c_date in [col_tgl_pbck3, col_tgl_back3, col_tgl_ck2]:
@@ -393,6 +394,9 @@ if is_night_mode:
     chart_font = "#E2E8F0"
     input_main_bg = "#0F172A"
     input_main_text = "#F8FAFC"
+    donut_other_slice = "#334155"
+    insight_banner_bg = "rgba(15, 23, 42, 0.72)"
+    insight_banner_border = "#334155"
 else:
     app_bg = "#F4F7FA"
     card_bg = "#FFFFFF"
@@ -411,6 +415,9 @@ else:
     chart_font = "#334155"
     input_main_bg = "#FFFFFF"
     input_main_text = "#0F172A"
+    donut_other_slice = "#CBD5E1"
+    insight_banner_bg = "#F8FAFC"
+    insight_banner_border = "#E2E8F0"
 
 st.markdown(f"""
 <style>
@@ -778,6 +785,10 @@ section[data-testid="stSidebar"] .stButton > button:hover {{
     font-weight: 600;
     color: {text_secondary};
     margin-top: 4px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
 }}
 
 .fin-icon-box {{
@@ -843,6 +854,23 @@ section[data-testid="stSidebar"] .stButton > button:hover {{
     margin-top: 5px;
 }}
 
+/* Executive Insight Banner di Bawah Donut Chart (Zona 4) */
+.donut-insight-strip {{
+    background: {insight_banner_bg};
+    border: 1px solid {insight_banner_border};
+    border-left: 4px solid #10B981;
+    border-radius: 10px;
+    padding: 10px 14px;
+    margin: 4px 8px 6px 8px;
+    font-size: 11.5px;
+    color: {text_primary};
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}}
+
 /* Styling Kontainer Kartu Streamlit (st.container(border=True)) */
 div[data-testid="stVerticalBlockBorderWrapper"] {{
     background-color: {card_bg} !important;
@@ -882,33 +910,59 @@ div[data-testid="stTextInput"] input {{
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# LOGIKA FILTER DATA (MENGGUNAKAN TAHUN_ACUAN & BULAN_ACUAN AGAR OUTSTANDING AMAN)
+# BAGIAN 1: PEMISAHAN FILTER PERIODE GLOBAL (df_period_all) VS ENTITAS PABRIK (df_filtered)
 # ==============================================================================
-df_filtered = df.copy()
-if selected_pabrik != "Semua Pabrik":
-    df_filtered = df_filtered[df_filtered[col_pabrik].astype(str).str.strip() == selected_pabrik]
-
-is_terbit = df_filtered['STATUS_CK2_BOOL'] == "TERBIT"
-is_proses = df_filtered['STATUS_CK2_BOOL'] == "PROSES"
+# 1. Buat df_period_all yang HANYA difilter berdasarkan Periode Waktu aktif (mencakup SEMUA PABRIK)
+df_period_all = df.copy()
+is_terbit_all = df_period_all['STATUS_CK2_BOOL'] == "TERBIT"
+is_proses_all = df_period_all['STATUS_CK2_BOOL'] == "PROSES"
 
 if mode_periode == "Semua Periode (Total Tahunan)":
-    df_filtered = df_filtered[(df_filtered['TAHUN_ACUAN'] == selected_tahun) | df_filtered['TAHUN_ACUAN'].isna()]
+    df_period_all = df_period_all[(df_period_all['TAHUN_ACUAN'] == selected_tahun) | df_period_all['TAHUN_ACUAN'].isna()]
 elif mode_periode == "Bulanan Tunggal (Single Month)":
-    cond_terbit = is_terbit & (df_filtered['TAHUN_ACUAN'] == selected_tahun) & (df_filtered['BULAN_ACUAN'] == selected_bulan_angka)
-    cond_proses = is_proses & (
-        ((df_filtered['TAHUN_ACUAN'] == selected_tahun) & (df_filtered['BULAN_ACUAN'] == selected_bulan_angka))
-        | df_filtered['TAHUN_ACUAN'].isna()
-        | df_filtered['BULAN_ACUAN'].isna()
+    cond_terbit_all = is_terbit_all & (df_period_all['TAHUN_ACUAN'] == selected_tahun) & (df_period_all['BULAN_ACUAN'] == selected_bulan_angka)
+    cond_proses_all = is_proses_all & (
+        ((df_period_all['TAHUN_ACUAN'] == selected_tahun) & (df_period_all['BULAN_ACUAN'] == selected_bulan_angka))
+        | df_period_all['TAHUN_ACUAN'].isna()
+        | df_period_all['BULAN_ACUAN'].isna()
     )
-    df_filtered = df_filtered[cond_terbit | cond_proses]
+    df_period_all = df_period_all[cond_terbit_all | cond_proses_all]
 elif mode_periode == "Kumulatif (s.d. Bulan)":
-    cond_terbit = is_terbit & (df_filtered['TAHUN_ACUAN'] == selected_tahun) & (df_filtered['BULAN_ACUAN'] <= selected_bulan_angka)
-    cond_proses = is_proses & (
-        ((df_filtered['TAHUN_ACUAN'] == selected_tahun) & (df_filtered['BULAN_ACUAN'] <= selected_bulan_angka))
-        | df_filtered['TAHUN_ACUAN'].isna()
-        | df_filtered['BULAN_ACUAN'].isna()
+    cond_terbit_all = is_terbit_all & (df_period_all['TAHUN_ACUAN'] == selected_tahun) & (df_period_all['BULAN_ACUAN'] <= selected_bulan_angka)
+    cond_proses_all = is_proses_all & (
+        ((df_period_all['TAHUN_ACUAN'] == selected_tahun) & (df_period_all['BULAN_ACUAN'] <= selected_bulan_angka))
+        | df_period_all['TAHUN_ACUAN'].isna()
+        | df_period_all['BULAN_ACUAN'].isna()
     )
-    df_filtered = df_filtered[cond_terbit | cond_proses]
+    df_period_all = df_period_all[cond_terbit_all | cond_proses_all]
+
+# 2. Hitung Grand Total KPPBC & Tabel Peringkat Pabrik dari df_period_all
+grand_total_cukai_ck2 = df_period_all[col_cukai_ck2].sum() if col_cukai_ck2 in df_period_all.columns else 0
+df_period_terbit_all = df_period_all[df_period_all['STATUS_CK2_BOOL'] == "TERBIT"]
+grand_total_dok_ck2 = df_period_terbit_all[df_period_terbit_all[col_ck2] != "-"][col_ck2].nunique() if col_ck2 in df_period_all.columns else 0
+
+if col_pabrik in df_period_all.columns and col_cukai_ck2 in df_period_all.columns and not df_period_all.empty:
+    df_all_pabrik_rank = (
+        df_period_all.groupby(col_pabrik)[col_cukai_ck2]
+        .sum()
+        .reset_index()
+    )
+    df_all_pabrik_rank = (
+        df_all_pabrik_rank[df_all_pabrik_rank[col_cukai_ck2] > 0]
+        .sort_values(by=col_cukai_ck2, ascending=False)
+        .reset_index(drop=True)
+    )
+    df_all_pabrik_rank['RANK'] = df_all_pabrik_rank.index + 1
+else:
+    df_all_pabrik_rank = pd.DataFrame(columns=[col_pabrik, col_cukai_ck2, 'RANK'])
+
+total_pabrik_aktif_periode = len(df_all_pabrik_rank)
+
+# 3. Buat df_filtered untuk Entitas Pabrik Terpilih
+if selected_pabrik != "Semua Pabrik":
+    df_filtered = df_period_all[df_period_all[col_pabrik].astype(str).str.strip() == selected_pabrik].copy()
+else:
+    df_filtered = df_period_all.copy()
 
 # ==============================================================================
 # PERHITUNGAN METRIK EKSEKUTIF & KECEPATAN LAYANAN (TGL_CK-2 DIKURANGI TANGGAL_BACK-3)
@@ -941,7 +995,6 @@ if not df_terbit_filtered.empty and col_tgl_ck2 in df_terbit_filtered.columns an
             avg_sla_val = sla_cal_series.mean()
             avg_sla_num_str = f"{avg_sla_val:.1f}".replace(".", ",")
             avg_sla_str = f"{avg_sla_num_str} Hari"
-            # Hitung Hari Kerja (Senin-Jumat) dengan numpy.busday_count sesuai Pasal 7 PER-2/BC/2026
             d_start = valid_sla_df[col_tgl_back3].values.astype('datetime64[D]')
             d_end = valid_sla_df[col_tgl_ck2].values.astype('datetime64[D]')
             hk_arr = np.busday_count(d_start, d_end)
@@ -952,6 +1005,20 @@ cukai_pbck3_val = df_filtered[col_cukai_pbck3].sum() if col_cukai_pbck3 in df_fi
 cukai_ck2_val = df_filtered[col_cukai_ck2].sum() if col_cukai_ck2 in df_filtered.columns else 0
 selisih_fisik = cukai_pbck3_val - cukai_ck2_val
 biaya_pengganti = df_filtered[col_biaya_pengganti].sum() if col_biaya_pengganti in df_filtered.columns else 0
+
+# Perhitungan Porsi Kontribusi & Ranking Pabrik Terpilih terhadap Grand Total KPPBC
+val_selected = cukai_ck2_val
+val_others = max(grand_total_cukai_ck2 - val_selected, 0)
+porsi_persen = (val_selected / grand_total_cukai_ck2 * 100) if grand_total_cukai_ck2 > 0 else 0.0
+porsi_persen_str = f"{porsi_persen:.2f}".replace(".", ",")
+dok_persen = (total_ck2 / grand_total_dok_ck2 * 100) if grand_total_dok_ck2 > 0 else 0.0
+dok_persen_str = f"{dok_persen:.1f}".replace(".", ",")
+
+selected_rank_int = None
+if selected_pabrik != "Semua Pabrik" and not df_all_pabrik_rank.empty:
+    match_rank = df_all_pabrik_rank[df_all_pabrik_rank[col_pabrik] == selected_pabrik]
+    if not match_rank.empty:
+        selected_rank_int = int(match_rank['RANK'].iloc[0])
 
 total_bks_pbck3 = df_filtered[col_bks_pbck3].sum() if col_bks_pbck3 in df_filtered.columns else 0
 total_bks_ck2 = df_filtered[col_bks_ck2].sum() if col_bks_ck2 in df_filtered.columns else 0
@@ -1190,11 +1257,17 @@ with col_main_chart:
         else:
             st.info("Belum ada data dokumen CK-2 yang berstatus TERBIT pada filter pabrik/tahun ini.")
 
+# BAGIAN 3: KARTU FINANSIAL KANAN (ZONA 2) DENGAN BADGE PORSI KONTRIBUSI
 with col_side_kpis:
     badge_cukai_side = (
         f'<span class="badge-danger">Selisih TMS: {fmt_exact_rp(-selisih_fisik)}</span>'
         if selisih_fisik > 0
         else '<span class="badge-success">100% Memenuhi Syarat</span>'
+    )
+    badge_share_side = (
+        f'&nbsp;<span class="badge-info">📊 Kontribusi: {porsi_persen_str}% Total KPPBC</span>'
+        if (selected_pabrik != "Semua Pabrik" and grand_total_cukai_ck2 > 0)
+        else ""
     )
 
     st.markdown(f"""
@@ -1211,7 +1284,7 @@ with col_side_kpis:
         <div>
             <div class="fin-label" style="color: {fin_green_text};">Realisasi Cukai CK-2 (MS)</div>
             <div class="fin-val" style="color: {fin_green_text};">{fmt_kpi_rupiah(cukai_ck2_val)}</div>
-            <div class="fin-sub">{badge_cukai_side}</div>
+            <div class="fin-sub">{badge_cukai_side}{badge_share_side}</div>
         </div>
         <div class="fin-icon-box box-emerald">💸</div>
     </div>
@@ -1298,48 +1371,128 @@ with st.container(border=True):
 st.markdown("<div style='margin-bottom: 14px;'></div>", unsafe_allow_html=True)
 
 # ==============================================================================
-# ZONA 4: SPLIT VIEW — DONUT CHART (45%) & RADAR KEPATUHAN SLA (55%)
+# ZONA 4: SPLIT VIEW — DYNAMIC CONTEXT-AWARE DONUT CHART (45%) & RADAR KEPATUHAN SLA (55%)
 # ==============================================================================
 col_donut, col_sla_radar = st.columns([4.5, 5.5])
 
 with col_donut:
     with st.container(border=True):
-        st.markdown("""
-        <div style="padding: 6px 10px 0 10px;">
-            <div class="section-title">🍩 Kontribusi Realisasi Nilai Cukai (Top 5 Pabrik)</div>
-            <div class="section-caption">Distribusi nilai pengembalian cukai yang memenuhi syarat (MS) per perusahaan.</div>
-        </div>
-        """, unsafe_allow_html=True)
+        # BAGIAN 2: UPGRADE DONUT CHART ZONA 4 MENJADI ADAPTIF 2 MODE
+        if selected_pabrik == "Semua Pabrik":
+            # MODE A — Semua Pabrik: Top 5 Pabrik + Pabrik Lainnya (Gabungan) = 100% Grand Total KPPBC
+            st.markdown("""
+            <div style="padding: 6px 10px 0 10px;">
+                <div class="section-title">🍩 Kontribusi Realisasi Nilai Cukai (Top 5 Pabrik vs Total KPPBC)</div>
+                <div class="section-caption">Proporsi nilai pengembalian cukai (MS) 5 pabrik terbesar beserta gabungan pabrik lainnya terhadap 100% total KPPBC.</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-        if col_pabrik in df_filtered.columns and col_cukai_ck2 in df_filtered.columns and not df_filtered.empty:
-            df_pabrik_grp = df_filtered.groupby(col_pabrik)[col_cukai_ck2].sum().reset_index()
-            df_pabrik_grp = df_pabrik_grp[df_pabrik_grp[col_cukai_ck2] > 0].sort_values(by=col_cukai_ck2, ascending=False).head(5)
-            if not df_pabrik_grp.empty:
-                df_pabrik_grp['CUKAI_STR'] = df_pabrik_grp[col_cukai_ck2].map(fmt_exact_rp)
-                fig_pie = px.pie(
-                    df_pabrik_grp,
-                    names=col_pabrik,
-                    values=col_cukai_ck2,
-                    color_discrete_sequence=px.colors.sequential.Blues_r,
-                    hole=0.48,
-                    custom_data=['CUKAI_STR']
-                )
-                fig_pie.update_traces(
-                    hovertemplate="<b>%{label}</b><br>Nilai Cukai: %{customdata[0]}<br>Porsi: %{percent}<extra></extra>"
-                )
+            if not df_all_pabrik_rank.empty and grand_total_cukai_ck2 > 0:
+                df_top5 = df_all_pabrik_rank.head(5).copy()
+                df_rest = df_all_pabrik_rank.iloc[5:]
+                if not df_rest.empty and df_rest[col_cukai_ck2].sum() > 0:
+                    others_sum = df_rest[col_cukai_ck2].sum()
+                    others_row = pd.DataFrame({
+                        col_pabrik: [f"Pabrik Lainnya ({len(df_rest)} Pabrik)"],
+                        col_cukai_ck2: [others_sum],
+                        'RANK': [6]
+                    })
+                    df_pie_mode_a = pd.concat([df_top5, others_row], ignore_index=True)
+                else:
+                    df_pie_mode_a = df_top5.copy()
+
+                df_pie_mode_a['CUKAI_STR'] = df_pie_mode_a[col_cukai_ck2].map(fmt_exact_rp)
+                palette_mode_a = ['#1E3A8A', '#2563EB', '#3B82F6', '#06B6D4', '#10B981', donut_other_slice]
+
+                fig_pie = go.Figure(data=[go.Pie(
+                    labels=df_pie_mode_a[col_pabrik],
+                    values=df_pie_mode_a[col_cukai_ck2],
+                    hole=0.56,
+                    sort=False,
+                    direction='clockwise',
+                    marker=dict(colors=palette_mode_a[:len(df_pie_mode_a)], line=dict(color=card_bg, width=2)),
+                    customdata=df_pie_mode_a['CUKAI_STR'],
+                    textinfo='percent',
+                    textposition='inside',
+                    insidetextorientation='horizontal',
+                    hovertemplate="<b>%{label}</b><br>Nilai Cukai (MS): <b>%{customdata}</b><br>Porsi Se-KPPBC: <b>%{percent}</b><extra></extra>"
+                )])
+
                 fig_pie.update_layout(
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)',
                     font=dict(color=chart_font),
-                    height=340,
-                    margin=dict(t=15, b=45, l=10, r=10),
-                    legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5, font=dict(color=chart_font))
+                    height=350,
+                    margin=dict(t=10, b=55, l=10, r=10),
+                    annotations=[dict(
+                        text=f"<span style='font-size:11px; color:{text_secondary};'>Total KPPBC</span><br><b style='font-size:14px; color:{text_primary};'>{fmt_miliar_short(grand_total_cukai_ck2)}</b>",
+                        x=0.5, y=0.5, font_size=13, showarrow=False
+                    )],
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.30, xanchor="center", x=0.5, font=dict(color=chart_font, size=11))
                 )
                 st.plotly_chart(fig_pie, use_container_width=True)
             else:
-                st.info("Belum ada realisasi nilai CK-2 pada filter ini.")
+                st.info("Belum ada realisasi nilai CK-2 pada periode ini.")
+
         else:
-            st.info("Data belum tersedia untuk grafik kontribusi.")
+            # MODE B — Saat 1 Pabrik Spesifik Dipilih: Porsi Pabrik Terpilih vs Pabrik Lainnya (Se-KPPBC)
+            st.markdown(f"""
+            <div style="padding: 6px 10px 0 10px;">
+                <div class="section-title">🍩 Porsi Kontribusi {selected_pabrik} terhadap Total KPPBC</div>
+                <div class="section-caption">Perbandingan realisasi cukai (MS) pabrik terpilih terhadap seluruh pabrik pada periode <b>{visual_periode_lbl}</b>.</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            if grand_total_cukai_ck2 > 0:
+                slice_labels = [selected_pabrik, "Pabrik Lainnya (Se-KPPBC)"]
+                slice_values = [val_selected, val_others]
+                slice_custom = [fmt_exact_rp(val_selected), fmt_exact_rp(val_others)]
+                slice_colors = ['#10B981', donut_other_slice]
+
+                fig_pie_single = go.Figure(data=[go.Pie(
+                    labels=slice_labels,
+                    values=slice_values,
+                    hole=0.58,
+                    sort=False,
+                    direction='clockwise',
+                    pull=[0.06, 0],
+                    marker=dict(colors=slice_colors, line=dict(color=card_bg, width=2.5)),
+                    customdata=slice_custom,
+                    textinfo='percent',
+                    textposition='inside',
+                    hovertemplate="<b>%{label}</b><br>Nilai Cukai (MS): <b>%{customdata}</b><br>Porsi Terhadap Total KPPBC: <b>%{percent}</b><extra></extra>"
+                )])
+
+                fig_pie_single.update_layout(
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color=chart_font),
+                    height=305,
+                    margin=dict(t=10, b=35, l=10, r=10),
+                    annotations=[dict(
+                        text=f"<b style='font-size:20px; color:#10B981;'>{porsi_persen_str}%</b><br><span style='font-size:11px; color:{text_secondary};'>Porsi Cukai</span>",
+                        x=0.5, y=0.5, font_size=14, showarrow=False
+                    )],
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.18, xanchor="center", x=0.5, font=dict(color=chart_font, size=11.5))
+                )
+                st.plotly_chart(fig_pie_single, use_container_width=True)
+
+                rank_label_str = (
+                    f"#{selected_rank_int} dari {total_pabrik_aktif_periode} Pabrik"
+                    if selected_rank_int is not None
+                    else f"Belum Ada Realisasi ({total_pabrik_aktif_periode} Pabrik Aktif)"
+                )
+
+                # Executive Insight Banner di Bawah Donut Chart
+                st.markdown(f"""
+                <div class="donut-insight-strip">
+                    <span>🏆 <b>Peringkat:</b> {rank_label_str}</span>
+                    <span>💸 <b>Porsi Cukai:</b> {porsi_persen_str}% dari Total KPPBC ({fmt_miliar_short(grand_total_cukai_ck2)})</span>
+                    <span>📜 <b>Porsi Dokumen:</b> {total_ck2} dari {grand_total_dok_ck2} Dok ({dok_persen_str}%)</span>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.info("Belum ada realisasi nilai CK-2 di KPPBC pada periode ini.")
 
 with col_sla_radar:
     with st.container(border=True):
