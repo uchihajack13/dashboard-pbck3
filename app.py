@@ -1805,29 +1805,28 @@ giat_pill_html = (
     else ""
 )
 
-st.markdown(f"""
-<div class="top-header-card">
-    <div class="header-left">
-        <img src="{LOGO_URL}" width="68" referrerpolicy="no-referrer"
-             style="object-fit:contain; filter: drop-shadow(0 2px 6px rgba(15,23,42,0.18));"
-             onerror="this.onerror=null; this.src='{BC_SVG_FALLBACK}';">
-        <div>
-            <h1 class="header-title">📊 EXECUTIVE DASHBOARD PBCK-3 & REALISASI CUKAI</h1>
-            <p class="header-subtitle">Monitoring Pelayanan Pengolahan Kembali & Pemusnahan BKC — KPPBC Tipe Madya Cukai Malang</p>
-            <span class="header-law">⚖️ Landasan Hukum: PMK Nomor 113 Tahun 2025 & PER-2/BC/2026 (SLA Maks. 10 Hari Kerja sejak BACK-3)</span>
-        </div>
-    </div>
-    <div class="header-pills">
-        <span class="status-pill pill-blue">🗓️ {visual_periode_lbl}</span>
-        <span class="status-pill pill-amber">🏷️ {visual_pc_pill_lbl}</span>
-        {asal_pill_html}
-        {giat_pill_html}
-        <span class="status-pill">🏢 {selected_pabrik}</span>
-        {rekon_pill_html}
-        {proses_pill_html}
-    </div>
+pills_list = [
+    f'<span class="status-pill pill-blue">🗓️ {visual_periode_lbl}</span>',
+    f'<span class="status-pill pill-amber">🏷️ {visual_pc_pill_lbl}</span>',
+    asal_pill_html,
+    giat_pill_html,
+    f'<span class="status-pill">🏢 {selected_pabrik}</span>',
+    rekon_pill_html,
+    proses_pill_html,
+]
+header_pills_joined = "".join([p.strip() for p in pills_list if p and p.strip()])
+
+st.markdown(f"""<div class="top-header-card">
+<div class="header-left">
+<img src="{LOGO_URL}" width="68" referrerpolicy="no-referrer" style="object-fit:contain; filter: drop-shadow(0 2px 6px rgba(15,23,42,0.18));" onerror="this.onerror=null; this.src='{BC_SVG_FALLBACK}';">
+<div>
+<h1 class="header-title">📊 EXECUTIVE DASHBOARD PBCK-3 & REALISASI CUKAI</h1>
+<p class="header-subtitle">Monitoring Pelayanan Pengolahan Kembali & Pemusnahan BKC — KPPBC Tipe Madya Cukai Malang</p>
+<span class="header-law">⚖️ Landasan Hukum: PMK Nomor 113 Tahun 2025 & PER-2/BC/2026 (SLA Maks. 10 Hari Kerja sejak BACK-3)</span>
 </div>
-""", unsafe_allow_html=True)
+</div>
+<div class="header-pills">{header_pills_joined}</div>
+</div>""", unsafe_allow_html=True)
 
 # ZONA 1: st.columns(4) untuk 4 Kartu KPI Utama bergaya Adminty + Mini-Breakdown Tahun PC & On-Process
 z1_c1, z1_c2, z1_c3, z1_c4 = st.columns(4)
@@ -2079,36 +2078,43 @@ with col_side_kpis:
         f"<div class='fin-pc-strip'>🏷️ PC 2025: {fmt_miliar_short(val_ck2_2025)} ({persen_ck2_2025:.1f}%) &bull; PC 2026: {fmt_miliar_short(val_ck2_2026)} ({persen_ck2_2026:.1f}%)</div>"
     )
 
-    st.markdown(f"""
-    <div class="admindek-fin-card">
-        <div>
-            <div class="fin-label">Nilai Pengajuan (PBCK-3)</div>
-            <div class="fin-val">{fmt_kpi_rupiah(cukai_pbck3_val)}</div>
-            <div class="fin-sub">{badge_pbck3_total}{badge_pbck3_proses}</div>
-            {pc_pbck3_strip_html}
-        </div>
-        <div class="fin-icon-box box-blue">📋</div>
-    </div>
+    sub_pbck3_joined = "".join([b.strip() for b in [badge_pbck3_total, badge_pbck3_proses] if b and b.strip()])
+    sub_ck2_joined = "".join([b.strip() for b in [badge_cukai_side, badge_share_side] if b and b.strip()])
+    bp_pc2025 = df_filtered['PC2025_BP'].sum() if selected_tahun_pc == "Semua Tahun PC (Gabungan)" else (biaya_pengganti if selected_tahun_pc == "Pita Cukai 2025" else 0.0)
+    bp_pc2026 = df_filtered['PC2026_BP'].sum() if selected_tahun_pc == "Semua Tahun PC (Gabungan)" else (biaya_pengganti if selected_tahun_pc == "Pita Cukai 2026" else 0.0)
+    persen_bp_2025 = (bp_pc2025 / biaya_pengganti * 100) if biaya_pengganti > 0 else 0.0
+    persen_bp_2026 = (bp_pc2026 / biaya_pengganti * 100) if biaya_pengganti > 0 else 0.0
+    pc_bp_strip_html = (
+        f"<div class='fin-pc-strip'>🏷️ PC 2025: {fmt_miliar_short(bp_pc2025)} ({persen_bp_2025:.1f}%) &bull; PC 2026: {fmt_miliar_short(bp_pc2026)} ({persen_bp_2026:.1f}%)</div>"
+    )
 
-    <div class="admindek-fin-card" style="background: {fin_green_bg}; border-color: {fin_green_border};">
-        <div>
-            <div class="fin-label" style="color: {fin_green_text};">Realisasi Cukai CK-2 (MS)</div>
-            <div class="fin-val" style="color: {fin_green_text};">{fmt_kpi_rupiah(cukai_ck2_val)}</div>
-            <div class="fin-sub">{badge_cukai_side}{badge_share_side}</div>
-            {pc_ck2_strip_html}
-        </div>
-        <div class="fin-icon-box box-emerald">💸</div>
-    </div>
-
-    <div class="admindek-fin-card">
-        <div>
-            <div class="fin-label" style="color: {fin_amber_text};">Biaya Pengganti (BP) Pita Cukai</div>
-            <div class="fin-val" style="color: {fin_amber_text};">{fmt_kpi_rupiah(biaya_pengganti)}</div>
-            <div class="fin-sub">Penerimaan Negara (PMK 113/2025)</div>
-        </div>
-        <div class="fin-icon-box box-amber">🏦</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"""<div class="admindek-fin-card">
+<div>
+<div class="fin-label">Nilai Pengajuan (PBCK-3)</div>
+<div class="fin-val">{fmt_kpi_rupiah(cukai_pbck3_val)}</div>
+<div class="fin-sub">{sub_pbck3_joined}</div>
+{pc_pbck3_strip_html}
+</div>
+<div class="fin-icon-box box-blue">📋</div>
+</div>
+<div class="admindek-fin-card" style="background: {fin_green_bg}; border-color: {fin_green_border};">
+<div>
+<div class="fin-label" style="color: {fin_green_text};">Realisasi Cukai CK-2 (MS)</div>
+<div class="fin-val" style="color: {fin_green_text};">{fmt_kpi_rupiah(cukai_ck2_val)}</div>
+<div class="fin-sub">{sub_ck2_joined}</div>
+{pc_ck2_strip_html}
+</div>
+<div class="fin-icon-box box-emerald">💸</div>
+</div>
+<div class="admindek-fin-card">
+<div>
+<div class="fin-label" style="color: {fin_amber_text};">Biaya Pengganti (BP) Pita Cukai</div>
+<div class="fin-val" style="color: {fin_amber_text};">{fmt_kpi_rupiah(biaya_pengganti)}</div>
+<div class="fin-sub"><span class="badge-warning">Penerimaan Negara (PMK 113/2025)</span></div>
+{pc_bp_strip_html}
+</div>
+<div class="fin-icon-box box-amber">🏦</div>
+</div>""", unsafe_allow_html=True)
 
 # ==============================================================================
 # ZONA 3: HORIZONTAL PROGRESS BAR STRIP (GAYA ADMINDEK — 4 KOLOM + RINCIAN PC & ON-PROCESS)
