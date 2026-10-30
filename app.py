@@ -38,6 +38,21 @@ BC_SVG_FALLBACK = (
 # ==============================================================================
 # BAGIAN 1: FUNGSI PEMBERSIHAN DATA & PERBAIKAN BUG TEKNIS (CROSSCHECKED)
 # ==============================================================================
+def deduplicate_columns(df_in):
+    """Menjamin tidak ada nama kolom duplikat setelah normalisasi huruf besar (.upper())."""
+    seen = {}
+    new_cols = []
+    for c in df_in.columns:
+        c_clean = str(c).strip().upper()
+        if c_clean not in seen:
+            seen[c_clean] = 0
+            new_cols.append(c_clean)
+        else:
+            seen[c_clean] += 1
+            new_cols.append(f"{c_clean}_DUP{seen[c_clean]}")
+    df_in.columns = new_cols
+    return df_in
+
 def clean_doc_str(series):
     """
     BUG FIX #1: Menghilangkan desimal .0 / .000000 pada Nomor Dokumen (No. BACK-3,
@@ -69,10 +84,8 @@ INDO_MONTH_REPLACE = {
 
 def parse_indo_date(series):
     """
-    BUG FIX KRITIS TANGGAL, GRAFIK BULANAN & SLA:
-    Di Excel DATABASE MERGE, kolom TGL_CK-2 berisi campuran objek datetime.datetime
-    (PPK26-001 s.d. PPK26-097) dan teks Bahasa Indonesia '19 Oktober 2026' (PPK26-098).
-    Fungsi ini memeriksa setiap sel secara presisi:
+    BUG FIX KRITIS TANGGAL, GRAFIK BULANAN & SLA (TIDAK DIUBAH — 100% AKURAT):
+    Memeriksa setiap sel secara presisi:
     1. Jika sudah berupa objek datetime/Timestamp asli, langsung dikembalikan tanpa diubah ke string.
     2. Jika berupa string berformat ISO YYYY-MM-DD, wajib di-parse dengan dayfirst=False.
     3. Jika berupa teks Bahasa Indonesia ('19 Oktober 2026'), diterjemahkan dan di-parse dengan dayfirst=True.
@@ -132,6 +145,42 @@ def normalize_tahun_pc(val):
         return " & ".join(yrs)
     return "-" if s.lower() in ["", "nan", "none", "nat", "-", "0"] else s
 
+def classify_asal_bkc(raw_text):
+    """
+    Normalisasi Asal BKC:
+    - 'Dalam & Luar Pabrik' jika dokumen memuat gabungan keduanya (yang di rincian item dipecah via CK-1 vs CK-5).
+    - 'Peredaran Bebas (Luar Pabrik)' jika berasal dari peredaran bebas / market return / luar pabrik / CK-5.
+    - 'Dalam Pabrik' jika berasal dari dalam pabrik / produksi / CK-1 (atau default).
+    """
+    if pd.isna(raw_text):
+        return "Dalam Pabrik"
+    s = str(raw_text).strip().upper()
+    has_dalam = any(k in s for k in ["DALAM PABRIK", "DALAM DAN LUAR", "DALAM & LUAR", "CK-1", "CK1"])
+    has_luar = any(k in s for k in ["PEREDARAN BEBAS", "LUAR PABRIK", "MARKET RETURN", "RETURN", "PASAR", "BEBAS", "CK-5", "CK5"])
+    if has_dalam and has_luar:
+        return "Dalam & Luar Pabrik"
+    if has_luar:
+        return "Peredaran Bebas (Luar Pabrik)"
+    return "Dalam Pabrik"
+
+def classify_kegiatan_lokasi(raw_text):
+    """
+    Normalisasi Jenis Kegiatan & Lokasi Pemusnahan ke dalam 3 kategori standar:
+    1. 'Pemusnahan - Luar Pabrik'
+    2. 'Pemusnahan - Dalam Pabrik'
+    3. 'Pengolahan Kembali'
+    """
+    if pd.isna(raw_text):
+        return "Pengolahan Kembali"
+    s = str(raw_text).strip().upper()
+    is_musnah = any(k in s for k in ["MUSNAH", "PEMUSNAHAN", "DIMUSNAHKAN"])
+    is_luar = any(k in s for k in ["LUAR PABRIK", "DI LUAR", "EKSTERNAL"])
+    if is_musnah and is_luar:
+        return "Pemusnahan - Luar Pabrik"
+    if is_musnah:
+        return "Pemusnahan - Dalam Pabrik"
+    return "Pengolahan Kembali"
+
 def fmt_exact_rp(val):
     if pd.isna(val) or val == 0:
         return "Rp 0"
@@ -145,13 +194,27 @@ def fmt_exact_bks(val):
 def fmt_miliar_short(val):
     if pd.isna(val) or val == 0:
         return "Rp 0"
-    if val >= 1_000_000_000_000:
-        return f"Rp {val/1_000_000_000_000:.2f} T".replace(".", ",")
-    elif val >= 1_000_000_000:
-        return f"Rp {val/1_000_000_000:.2f} M".replace(".", ",")
-    elif val >= 1_000_000:
-        return f"Rp {val/1_000_000:.2f} Jt".replace(".", ",")
+    sign = "-" if val < 0 else ""
+    v = abs(val)
+    if v >= 1_000_000_000_000:
+        return f"{sign}Rp {v/1_000_000_000_000:.2f} T".replace(".", ",")
+    elif v >= 1_000_000_000:
+        return f"{sign}Rp {v/1_000_000_000:.2f} M".replace(".", ",")
+    elif v >= 1_000_000:
+        return f"{sign}Rp {v/1_000_000:.2f} Jt".replace(".", ",")
     return fmt_exact_rp(val)
+
+def fmt_axis_rp_indo(val):
+    """Format label sumbu Y grafik dalam Bahasa Indonesia (Rp X,X M / Rp X,X Jt) tanpa singkatan 'B'."""
+    if pd.isna(val) or val <= 0:
+        return "Rp 0"
+    if val >= 1_000_000_000_000:
+        return f"Rp {val/1_000_000_000_000:.1f} T".replace(".", ",")
+    elif val >= 1_000_000_000:
+        return f"Rp {val/1_000_000_000:.1f} M".replace(".", ",")
+    elif val >= 1_000_000:
+        return f"Rp {val/1_000_000:.0f} Jt".replace(".", ",")
+    return f"Rp {val:,.0f}".replace(",", ".")
 
 def fmt_bks_short(val):
     if pd.isna(val) or val == 0:
@@ -198,7 +261,7 @@ def fmt_kpi_bungkus(val):
 
 def clean_num(series):
     if pd.api.types.is_numeric_dtype(series):
-        return series.fillna(0)
+        return series.fillna(0.0).astype(float)
     def parse_value(x):
         if pd.isna(x):
             return 0
@@ -209,7 +272,7 @@ def clean_num(series):
             return float(x_str)
         except ValueError:
             return 0
-    return series.map(parse_value)
+    return series.map(parse_value).astype(float)
 
 # ==============================================================================
 # PEMBACAAN DATA CLOUD GOOGLE DRIVE (GUARDRAIL: FILE ID & LOGIKA TETAP UTUH)
@@ -220,11 +283,11 @@ def load_data():
     url_merge = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
     with pd.ExcelFile(url_merge) as xls:
         df_main = pd.read_excel(xls, sheet_name="DATABASE MERGE")
-        df_main.columns = df_main.columns.astype(str).str.strip().str.upper()
+        df_main = deduplicate_columns(df_main)
         sheet_map = {s.strip().upper(): s for s in xls.sheet_names}
         if "DETAIL" in sheet_map:
             df_detail = pd.read_excel(xls, sheet_name=sheet_map["DETAIL"])
-            df_detail.columns = df_detail.columns.astype(str).str.strip().str.upper()
+            df_detail = deduplicate_columns(df_detail)
             valid_cols = [c for c in df_detail.columns if not c.startswith("UNNAMED")]
             df_detail = df_detail[valid_cols]
         else:
@@ -335,10 +398,18 @@ for c_num in [col_cukai_pbck3, col_cukai_ck2, col_biaya_pengganti, col_bks_pbck3
     if c_num in df.columns:
         df[c_num] = clean_num(df[c_num])
 
-df['BUNGKUS_TMS'] = (df[col_bks_pbck3] - df[col_bks_ck2]).clip(lower=0)
+# PERBAIKAN LOGIKA AKUNTANSI #1: Hanya hitung BUNGKUS_TMS pada baris yang sudah berstatus TERBIT
+df['BUNGKUS_TMS'] = np.where(
+    df['STATUS_CK2_BOOL'] == "TERBIT",
+    (df[col_bks_pbck3] - df[col_bks_ck2]).clip(lower=0),
+    0.0
+)
 
 # ==============================================================================
-# DETEKSI & INTEGRASI OTOMATIS PARAMETER SEKUNDER: TAHUN PITA CUKAI (TAHUN PC)
+# DETEKSI & INTEGRASI OTOMATIS PARAMETER SEKUNDER:
+# 1. TAHUN PITA CUKAI (PC 2025 vs PC 2026)
+# 2. ASAL BKC (DALAM PABRIK vs PEREDARAN BEBAS / LUAR PABRIK)
+# 3. JENIS KEGIATAN & LOKASI PEMUSNAHAN (PENGOLAHAN KEMBALI vs PEMUSNAHAN DALAM/LUAR)
 # ==============================================================================
 pc_candidates_main = [
     c for c in df.columns
@@ -351,12 +422,40 @@ if col_tahun_pc_main:
 else:
     df['TAHUN_PC_STR'] = "-"
 
-# Pemetaan & Agregasi Rincian Item per Tahun PC dari df_detail (Sheet DETAIL)
+# Deteksi Kolom Asal BKC di df (DATABASE MERGE)
+asal_candidates_main = [
+    c for c in df.columns
+    if any(k in c for k in ["ASAL", "POSISI_BKC", "SUMBER", "PEREDARAN", "STATUS_BKC", "KATEGORI_BKC", "DALAM_LUAR", "LOKASI_ASAL"])
+]
+if asal_candidates_main:
+    combined_asal_series = df[asal_candidates_main].fillna("").astype(str).agg(" | ".join, axis=1)
+    df['ASAL_BKC_STR'] = combined_asal_series.map(classify_asal_bkc)
+else:
+    df['ASAL_BKC_STR'] = "Dalam Pabrik"
+
+# Deteksi Kolom Kegiatan & Lokasi Pemusnahan di df (DATABASE MERGE)
+giat_candidates_main = [
+    c for c in df.columns
+    if any(k in c for k in [
+        "SKEMA_PELAKSANAAN", "TENTANG_KEP", "DIAPAKAN", "HAL_SURAT",
+        "KEGIATAN", "JENIS_KEGIATAN", "TUJUAN", "PENYELESAIAN", "PEMUSNAHAN"
+    ])
+]
+if giat_candidates_main:
+    combined_giat_series = df[giat_candidates_main].fillna("").astype(str).agg(" | ".join, axis=1)
+    df['KEGIATAN_LOKASI_STR'] = combined_giat_series.map(classify_kegiatan_lokasi)
+else:
+    df['KEGIATAN_LOKASI_STR'] = "Pengolahan Kembali"
+
+# Pemetaan & Agregasi Rincian Item per Tahun PC & Asal BKC (CK-1 vs CK-5) dari df_detail (Sheet DETAIL)
 if not df_detail.empty:
     col_dtl_agenda_key = "AGENDA" if "AGENDA" in df_detail.columns else ("NO. AGENDA" if "NO. AGENDA" in df_detail.columns else df_detail.columns[0])
     col_dtl_pc = next((c for c in df_detail.columns if "TAHUN" in c and ("PC" in c or "PITA" in c)), None)
     if col_dtl_pc is None:
         col_dtl_pc = next((c for c in df_detail.columns if c == "TAHUN"), None)
+
+    col_dtl_asal_item = next((c for c in df_detail.columns if c == "ASAL"), None)
+    col_dtl_dok_asal = next((c for c in df_detail.columns if "DOKUMEN ASAL" in c), None)
 
     col_dtl_bks_pbck3 = next((c for c in df_detail.columns if "KEMASAN" in c and "PBCK" in c), None)
     col_dtl_bks_ms = next((c for c in df_detail.columns if "KEMASAN" in c and "BACK" in c), None)
@@ -369,10 +468,22 @@ if not df_detail.empty:
         dtl_work = dtl_work[dtl_work['_YR_NUM'].isin([2025, 2026])].copy()
         dtl_work['_YR_INT'] = dtl_work['_YR_NUM'].astype(int)
 
+        if col_dtl_asal_item:
+            s_asal_dtl = dtl_work[col_dtl_asal_item].astype(str).str.upper().str.strip()
+            dtl_work['_ASAL_GRP'] = np.where(
+                s_asal_dtl.str.contains("CK-5|CK5|LUAR|BEBAS", regex=True),
+                "LUAR",
+                "DALAM"
+            )
+        elif col_dtl_dok_asal:
+            s_dok_dtl = dtl_work[col_dtl_dok_asal].astype(str).str.upper().str.strip()
+            dtl_work['_ASAL_GRP'] = np.where(s_dok_dtl.str.contains("LUAR|BEBAS", regex=True), "LUAR", "DALAM")
+        else:
+            dtl_work['_ASAL_GRP'] = "DALAM"
+
         for c_dnum in [col_dtl_bks_pbck3, col_dtl_bks_ms, col_dtl_cukai_pbck3, col_dtl_cukai_ms]:
             dtl_work[c_dnum] = clean_num(dtl_work[c_dnum])
 
-        # Hanya hitung baris item aktif yang memiliki nilai kemasan atau cukai > 0
         dtl_active = dtl_work[(dtl_work[col_dtl_bks_pbck3] > 0) | (dtl_work[col_dtl_cukai_pbck3] > 0) | (dtl_work[col_dtl_cukai_ms] > 0)].copy()
 
         # Pemetaan label tahun PC dari detail jika di df utama belum terisi
@@ -385,22 +496,37 @@ if not df_detail.empty:
         if mask_missing_pc.any():
             df.loc[mask_missing_pc, 'TAHUN_PC_STR'] = df.loc[mask_missing_pc, col_agenda].map(lambda a: dtl_yr_map.get(a, "-"))
 
+        # 1) Agregasi Detail per Tahun PC (2025 vs 2026)
         grp_dtl_pc = dtl_active.groupby([col_dtl_agenda_key, '_YR_INT']).agg(
             BKS_PBCK3=(col_dtl_bks_pbck3, 'sum'),
             BKS_MS=(col_dtl_bks_ms, 'sum'),
             CUKAI_PBCK3=(col_dtl_cukai_pbck3, 'sum'),
             CUKAI_MS=(col_dtl_cukai_ms, 'sum')
         ).unstack(fill_value=0.0)
-
         grp_dtl_pc.columns = [f"_DTL_{m}_{y}" for m, y in grp_dtl_pc.columns]
-        grp_dtl_pc = grp_dtl_pc.reset_index().rename(columns={col_dtl_agenda_key: "_AGENDA_JOIN_KEY"})
-        df = pd.merge(df, grp_dtl_pc, left_on=col_agenda, right_on="_AGENDA_JOIN_KEY", how="left")
+        grp_dtl_pc = grp_dtl_pc.reset_index().rename(columns={col_dtl_agenda_key: "_AGENDA_JOIN_KEY_PC"})
+        df = pd.merge(df, grp_dtl_pc, left_on=col_agenda, right_on="_AGENDA_JOIN_KEY_PC", how="left")
+
+        # 2) Agregasi Detail per Asal BKC (DALAM [CK-1] vs LUAR [CK-5])
+        grp_dtl_asal = dtl_active.groupby([col_dtl_agenda_key, '_ASAL_GRP']).agg(
+            BKS_PBCK3=(col_dtl_bks_pbck3, 'sum'),
+            BKS_MS=(col_dtl_bks_ms, 'sum'),
+            CUKAI_PBCK3=(col_dtl_cukai_pbck3, 'sum'),
+            CUKAI_MS=(col_dtl_cukai_ms, 'sum')
+        ).unstack(fill_value=0.0)
+        grp_dtl_asal.columns = [f"_DTL_ASAL_{m}_{a}" for m, a in grp_dtl_asal.columns]
+        grp_dtl_asal = grp_dtl_asal.reset_index().rename(columns={col_dtl_agenda_key: "_AGENDA_JOIN_KEY_ASAL"})
+        df = pd.merge(df, grp_dtl_asal, left_on=col_agenda, right_on="_AGENDA_JOIN_KEY_ASAL", how="left")
 
 for c_init in [
     "_DTL_BKS_PBCK3_2025", "_DTL_BKS_PBCK3_2026",
     "_DTL_BKS_MS_2025", "_DTL_BKS_MS_2026",
     "_DTL_CUKAI_PBCK3_2025", "_DTL_CUKAI_PBCK3_2026",
-    "_DTL_CUKAI_MS_2025", "_DTL_CUKAI_MS_2026"
+    "_DTL_CUKAI_MS_2025", "_DTL_CUKAI_MS_2026",
+    "_DTL_ASAL_BKS_PBCK3_DALAM", "_DTL_ASAL_BKS_PBCK3_LUAR",
+    "_DTL_ASAL_BKS_MS_DALAM", "_DTL_ASAL_BKS_MS_LUAR",
+    "_DTL_ASAL_CUKAI_PBCK3_DALAM", "_DTL_ASAL_CUKAI_PBCK3_LUAR",
+    "_DTL_ASAL_CUKAI_MS_DALAM", "_DTL_ASAL_CUKAI_MS_LUAR"
 ]:
     if c_init not in df.columns:
         df[c_init] = 0.0
@@ -420,8 +546,6 @@ for main_col, d25_col, d26_col, out25_col, out26_col in [
     only_dtl_26 = has_dtl_split & (df[d26_col] > 0) & (df[d25_col] == 0)
     both_dtl = has_dtl_split & (df[d25_col] > 0) & (df[d26_col] > 0)
 
-    # Jika di DATABASE MERGE tertulis murni '2025' atau '2026', prioritaskan label utama;
-    # jika tertulis '2025 & 2026', pecah secara presisi menggunakan angka item dari Sheet DETAIL!
     df[out25_col] = np.where(
         is_pure_2025, df[main_col],
         np.where(is_pure_2026, 0.0, np.where(only_dtl_25, df[main_col], np.where(both_dtl, df[d25_col], 0.0)))
@@ -431,13 +555,42 @@ for main_col, d25_col, d26_col, out25_col, out26_col in [
         np.where(is_pure_2025, 0.0, np.where(only_dtl_26, df[main_col], np.where(both_dtl, df[d26_col], 0.0)))
     )
 
-# Proporsi Biaya Pengganti (BP) untuk PC 2025 vs PC 2026 berdasarkan proporsi bungkus diajukan
 tot_bks_row = (df['PC2025_BKS_PBCK3'] + df['PC2026_BKS_PBCK3']).replace(0, np.nan)
 df['PC2025_BP'] = (df[col_biaya_pengganti] * (df['PC2025_BKS_PBCK3'] / tot_bks_row)).fillna(0.0)
 df['PC2026_BP'] = (df[col_biaya_pengganti] * (df['PC2026_BKS_PBCK3'] / tot_bks_row)).fillna(0.0)
 
 df['HAS_PC_2025'] = df['TAHUN_PC_STR'].astype(str).str.contains("2025", na=False) | (df['PC2025_BKS_PBCK3'] > 0)
 df['HAS_PC_2026'] = df['TAHUN_PC_STR'].astype(str).str.contains("2026", na=False) | (df['PC2026_BKS_PBCK3'] > 0)
+
+# Rekonsiliasi Presisi Nilai & Bungkus Asal BKC (Dalam Pabrik vs Peredaran Bebas / Luar Pabrik)
+for main_col, d_dlm_col, d_luar_col, out_dlm_col, out_luar_col in [
+    (col_bks_pbck3, "_DTL_ASAL_BKS_PBCK3_DALAM", "_DTL_ASAL_BKS_PBCK3_LUAR", "ASAL_DALAM_BKS_PBCK3", "ASAL_LUAR_BKS_PBCK3"),
+    (col_bks_ck2, "_DTL_ASAL_BKS_MS_DALAM", "_DTL_ASAL_BKS_MS_LUAR", "ASAL_DALAM_BKS_MS", "ASAL_LUAR_BKS_MS"),
+    (col_cukai_pbck3, "_DTL_ASAL_CUKAI_PBCK3_DALAM", "_DTL_ASAL_CUKAI_PBCK3_LUAR", "ASAL_DALAM_CUKAI_PBCK3", "ASAL_LUAR_CUKAI_PBCK3"),
+    (col_cukai_ck2, "_DTL_ASAL_CUKAI_MS_DALAM", "_DTL_ASAL_CUKAI_MS_LUAR", "ASAL_DALAM_CUKAI_MS", "ASAL_LUAR_CUKAI_MS"),
+]:
+    is_pure_dalam = df['ASAL_BKC_STR'] == "Dalam Pabrik"
+    is_pure_luar = df['ASAL_BKC_STR'] == "Peredaran Bebas (Luar Pabrik)"
+    has_asal_split = (df[d_dlm_col] + df[d_luar_col]) > 0
+    only_dlm = has_asal_split & (df[d_dlm_col] > 0) & (df[d_luar_col] == 0)
+    only_luar = has_asal_split & (df[d_luar_col] > 0) & (df[d_dlm_col] == 0)
+    both_asal = has_asal_split & (df[d_dlm_col] > 0) & (df[d_luar_col] > 0)
+
+    df[out_dlm_col] = np.where(
+        is_pure_dalam, df[main_col],
+        np.where(is_pure_luar, 0.0, np.where(only_dlm, df[main_col], np.where(both_asal, df[d_dlm_col], df[main_col] * 0.5)))
+    )
+    df[out_luar_col] = np.where(
+        is_pure_luar, df[main_col],
+        np.where(is_pure_dalam, 0.0, np.where(only_luar, df[main_col], np.where(both_asal, df[d_luar_col], df[main_col] * 0.5)))
+    )
+
+tot_asal_bks_row = (df['ASAL_DALAM_BKS_PBCK3'] + df['ASAL_LUAR_BKS_PBCK3']).replace(0, np.nan)
+df['ASAL_DALAM_BP'] = (df[col_biaya_pengganti] * (df['ASAL_DALAM_BKS_PBCK3'] / tot_asal_bks_row)).fillna(0.0)
+df['ASAL_LUAR_BP'] = (df[col_biaya_pengganti] * (df['ASAL_LUAR_BKS_PBCK3'] / tot_asal_bks_row)).fillna(0.0)
+
+df['HAS_ASAL_DALAM'] = (df['ASAL_BKC_STR'].isin(["Dalam Pabrik", "Dalam & Luar Pabrik"])) | (df['ASAL_DALAM_BKS_PBCK3'] > 0)
+df['HAS_ASAL_LUAR'] = (df['ASAL_BKC_STR'].isin(["Peredaran Bebas (Luar Pabrik)", "Dalam & Luar Pabrik"])) | (df['ASAL_LUAR_BKS_PBCK3'] > 0)
 
 # ==============================================================================
 # ZONA SIDEBAR KIRI GELAP (#1E293B) — PANEL NAVIGASI, TEMA & FILTER EKSEKUTIF
@@ -467,7 +620,7 @@ with st.sidebar:
     is_night_mode = "Night Mode" in theme_choice
 
     st.markdown("---")
-    st.markdown("### 🎛️ Filter Entitas & Tahun")
+    st.markdown("### 🎛️ Filter Entitas & Parameter")
     pabrik_list = ["Semua Pabrik"] + sorted([
         str(p).strip() for p in df[col_pabrik].dropna().unique().tolist()
         if str(p).strip().lower() not in ["", "-", "nan", "none"]
@@ -479,7 +632,7 @@ with st.sidebar:
         tahun_tersedia = sorted(df['TAHUN_ACUAN'].dropna().unique().astype(int).tolist(), reverse=True)
     selected_tahun = st.selectbox("📅 Pilih Tahun Anggaran:", tahun_tersedia)
 
-    # FILTER SEKUNDER BARU: Tahun Pita Cukai (PC 2025 vs PC 2026)
+    # FILTER SEKUNDER: Tahun Pita Cukai (PC 2025 vs PC 2026)
     opsi_tahun_pc = ["Semua Tahun PC (Gabungan)", "Pita Cukai 2025", "Pita Cukai 2026"]
     extra_pc_years = sorted({
         y for val in df['TAHUN_PC_STR'].dropna().unique()
@@ -489,6 +642,24 @@ with st.sidebar:
     for ey in extra_pc_years:
         opsi_tahun_pc.append(f"Pita Cukai {ey}")
     selected_tahun_pc = st.selectbox("🏷️ Tahun Pita Cukai (PC):", opsi_tahun_pc, index=0)
+
+    # FILTER BARU #1: Asal BKC (Dalam Pabrik vs Peredaran Bebas / Luar Pabrik)
+    opsi_asal_bkc = [
+        "Semua Asal BKC (Gabungan)",
+        "Dalam Pabrik",
+        "Peredaran Bebas (Luar Pabrik)"
+    ]
+    selected_asal_bkc = st.selectbox("🏭 Asal BKC (PBCK-3):", opsi_asal_bkc, index=0)
+
+    # FILTER BARU #2: Kegiatan & Lokasi Pemusnahan
+    opsi_kegiatan = [
+        "Semua Kegiatan (Gabungan)",
+        "Pengolahan Kembali",
+        "Semua Pemusnahan (Gabungan)",
+        "Pemusnahan - Dalam Pabrik",
+        "Pemusnahan - Luar Pabrik"
+    ]
+    selected_kegiatan = st.selectbox("🔥 Kegiatan & Lokasi:", opsi_kegiatan, index=0)
 
     st.markdown("---")
     st.markdown("### 🗓️ Filter Periode CK-2")
@@ -536,6 +707,9 @@ if is_night_mode:
     pc_mini_bg = "rgba(15, 23, 42, 0.65)"
     pc_mini_border = "#334155"
     pc_mini_text = "#E2E8F0"
+    tax_box_bg = "rgba(15, 23, 42, 0.55)"
+    tax_rose_bg = "rgba(244, 63, 94, 0.14)"
+    tax_rose_border = "rgba(244, 63, 94, 0.45)"
 else:
     app_bg = "#F4F7FA"
     card_bg = "#FFFFFF"
@@ -561,6 +735,9 @@ else:
     pc_mini_bg = "#F8FAFC"
     pc_mini_border = "#E2E8F0"
     pc_mini_text = "#334155"
+    tax_box_bg = "#F8FAFC"
+    tax_rose_bg = "#FFF1F2"
+    tax_rose_border = "#FECDD3"
 
 st.markdown(f"""
 <style>
@@ -688,7 +865,7 @@ section[data-testid="stSidebar"] .stButton > button:hover {{
     box-shadow: 0 6px 16px rgba(37, 99, 235, 0.38) !important;
 }}
 
-/* BAGIAN 1: PERBAIKAN BUG VISUAL TOMBOL UNDUH CSV & KOTAK PENCARIAN DI NIGHT/MORNING MODE */
+/* PERBAIKAN BUG VISUAL TOMBOL UNDUH CSV & KOTAK PENCARIAN DI NIGHT/MORNING MODE */
 div[data-testid="stDownloadButton"] > button {{
     background: linear-gradient(135deg, #059669 0%, #10B981 100%) !important;
     color: #FFFFFF !important;
@@ -857,6 +1034,12 @@ div[data-testid="stTextInput"] input::placeholder {{
     background: #FFFBEB;
     color: #B45309;
     border-color: #FDE68A;
+}}
+
+.pill-purple {{
+    background: #F5F3FF;
+    color: #6D28D9;
+    border-color: #DDD6FE;
 }}
 
 /* 4. ZONA 1: 4 Top KPI Cards Berwarna (Gaya Adminty dengan Solid Footer Bar) */
@@ -1093,6 +1276,83 @@ div[data-testid="stTextInput"] input::placeholder {{
     margin-top: 3px;
 }}
 
+/* 7. ZONA 3B: Executive Taxonomy & Location Strip (Asal BKC & Kegiatan/Lokasi Pemusnahan) */
+.taxonomy-card-wrap {{
+    padding: 6px 10px 8px 10px;
+}}
+
+.taxonomy-bar-multi {{
+    width: 100%;
+    height: 9px;
+    background-color: {track_bg};
+    border-radius: 999px;
+    overflow: hidden;
+    display: flex;
+    margin: 8px 0 12px 0;
+}}
+
+.taxonomy-grid-2 {{
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+}}
+
+.taxonomy-grid-3 {{
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+}}
+
+.taxonomy-mini-box {{
+    background: {tax_box_bg};
+    border: 1px solid {card_border};
+    border-radius: 10px;
+    padding: 10px 12px;
+    transition: transform 0.2s ease;
+}}
+
+.taxonomy-mini-box:hover {{
+    transform: translateY(-2px);
+}}
+
+.taxonomy-mini-box-rose {{
+    background: {tax_rose_bg};
+    border: 1.5px solid {tax_rose_border};
+    border-radius: 10px;
+    padding: 10px 12px;
+    transition: transform 0.2s ease;
+}}
+
+.taxonomy-mini-box-rose:hover {{
+    transform: translateY(-2px);
+}}
+
+.tax-box-head {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    font-weight: 800;
+    color: {text_secondary};
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 4px;
+}}
+
+.tax-box-main {{
+    font-size: 15.5px;
+    font-weight: 800;
+    color: {text_primary};
+    line-height: 1.25;
+}}
+
+.tax-box-sub {{
+    font-size: 10.5px;
+    font-weight: 600;
+    color: {text_secondary};
+    margin-top: 3px;
+}}
+
 /* Executive Insight Banner di Bawah Donut Chart (Zona 4) */
 .donut-insight-strip {{
     background: {insight_banner_bg};
@@ -1141,13 +1401,14 @@ div[data-testid="stVerticalBlockBorderWrapper"] {{
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# FUNGSI HELPER FILTER TAHUN PITA CUKAI (MENYESUAIKAN NILAI JIKA FILTER PC AKTIF)
+# FUNGSI HELPER FILTER TAHUN PITA CUKAI & PARAMETER TAKSONOMI (ASAL BKC & KEGIATAN)
 # ==============================================================================
 def apply_tahun_pc_filter(df_in, pc_choice):
     """
     Jika pengguna memilih 'Pita Cukai 2025' atau 'Pita Cukai 2026', saring dokumen yang
     memiliki pita cukai tahun tersebut dan sesuaikan kolom nilai/bungkus pada dokumen
     gabungan ('2025 & 2026') agar metrik mencerminkan 100% porsi tahun PC yang dipilih!
+    BUNGKUS_TMS hanya dihitung pada berkas yang sudah berstatus TERBIT.
     """
     out = df_in.copy()
     if pc_choice == "Pita Cukai 2025":
@@ -1157,7 +1418,11 @@ def apply_tahun_pc_filter(df_in, pc_choice):
         out[col_cukai_pbck3] = out['PC2025_CUKAI_PBCK3']
         out[col_cukai_ck2] = out['PC2025_CUKAI_MS']
         out[col_biaya_pengganti] = out['PC2025_BP']
-        out['BUNGKUS_TMS'] = (out[col_bks_pbck3] - out[col_bks_ck2]).clip(lower=0)
+        out['BUNGKUS_TMS'] = np.where(
+            out['STATUS_CK2_BOOL'] == "TERBIT",
+            (out[col_bks_pbck3] - out[col_bks_ck2]).clip(lower=0),
+            0.0
+        )
     elif pc_choice == "Pita Cukai 2026":
         out = out[out['HAS_PC_2026']].copy()
         out[col_bks_pbck3] = out['PC2026_BKS_PBCK3']
@@ -1165,10 +1430,74 @@ def apply_tahun_pc_filter(df_in, pc_choice):
         out[col_cukai_pbck3] = out['PC2026_CUKAI_PBCK3']
         out[col_cukai_ck2] = out['PC2026_CUKAI_MS']
         out[col_biaya_pengganti] = out['PC2026_BP']
-        out['BUNGKUS_TMS'] = (out[col_bks_pbck3] - out[col_bks_ck2]).clip(lower=0)
+        out['BUNGKUS_TMS'] = np.where(
+            out['STATUS_CK2_BOOL'] == "TERBIT",
+            (out[col_bks_pbck3] - out[col_bks_ck2]).clip(lower=0),
+            0.0
+        )
     elif pc_choice != "Semua Tahun PC (Gabungan)":
         yr_target = pc_choice.replace("Pita Cukai", "").strip()
         out = out[out['TAHUN_PC_STR'].astype(str).str.contains(yr_target, na=False)].copy()
+    return out
+
+def apply_taxonomy_filters(df_in, asal_choice, giat_choice):
+    """
+    Menyaring dataframe berdasarkan Asal BKC (Dalam Pabrik vs Peredaran Bebas / Luar Pabrik)
+    dan Jenis Kegiatan & Lokasi Pemusnahan. Untuk dokumen gabungan ('Dalam & Luar Pabrik'),
+    kolom nilai cukai & kemasan disesuaikan secara presisi menggunakan porsi CK-1 vs CK-5 dari Sheet DETAIL.
+    """
+    out = df_in.copy()
+    if asal_choice == "Dalam Pabrik":
+        out = out[out['HAS_ASAL_DALAM']].copy()
+        is_mix_asal = out['ASAL_BKC_STR'] == "Dalam & Luar Pabrik"
+        if is_mix_asal.any():
+            out.loc[is_mix_asal, col_bks_pbck3] = out.loc[is_mix_asal, 'ASAL_DALAM_BKS_PBCK3']
+            out.loc[is_mix_asal, col_bks_ck2] = out.loc[is_mix_asal, 'ASAL_DALAM_BKS_MS']
+            out.loc[is_mix_asal, col_cukai_pbck3] = out.loc[is_mix_asal, 'ASAL_DALAM_CUKAI_PBCK3']
+            out.loc[is_mix_asal, col_cukai_ck2] = out.loc[is_mix_asal, 'ASAL_DALAM_CUKAI_MS']
+            out.loc[is_mix_asal, col_biaya_pengganti] = out.loc[is_mix_asal, 'ASAL_DALAM_BP']
+            # Sinkronkan juga kolom PC2025 pada berkas campuran Asal BKC
+            is_mix_25 = is_mix_asal & (out['TAHUN_PC_STR'] == "2025")
+            out.loc[is_mix_25, 'PC2025_BKS_PBCK3'] = out.loc[is_mix_25, 'ASAL_DALAM_BKS_PBCK3']
+            out.loc[is_mix_25, 'PC2025_BKS_MS'] = out.loc[is_mix_25, 'ASAL_DALAM_BKS_MS']
+            out.loc[is_mix_25, 'PC2025_CUKAI_PBCK3'] = out.loc[is_mix_25, 'ASAL_DALAM_CUKAI_PBCK3']
+            out.loc[is_mix_25, 'PC2025_CUKAI_MS'] = out.loc[is_mix_25, 'ASAL_DALAM_CUKAI_MS']
+            out.loc[is_mix_25, 'PC2025_BP'] = out.loc[is_mix_25, 'ASAL_DALAM_BP']
+        out['BUNGKUS_TMS'] = np.where(
+            out['STATUS_CK2_BOOL'] == "TERBIT",
+            (out[col_bks_pbck3] - out[col_bks_ck2]).clip(lower=0),
+            0.0
+        )
+    elif asal_choice == "Peredaran Bebas (Luar Pabrik)":
+        out = out[out['HAS_ASAL_LUAR']].copy()
+        is_mix_asal = out['ASAL_BKC_STR'] == "Dalam & Luar Pabrik"
+        if is_mix_asal.any():
+            out.loc[is_mix_asal, col_bks_pbck3] = out.loc[is_mix_asal, 'ASAL_LUAR_BKS_PBCK3']
+            out.loc[is_mix_asal, col_bks_ck2] = out.loc[is_mix_asal, 'ASAL_LUAR_BKS_MS']
+            out.loc[is_mix_asal, col_cukai_pbck3] = out.loc[is_mix_asal, 'ASAL_LUAR_CUKAI_PBCK3']
+            out.loc[is_mix_asal, col_cukai_ck2] = out.loc[is_mix_asal, 'ASAL_LUAR_CUKAI_MS']
+            out.loc[is_mix_asal, col_biaya_pengganti] = out.loc[is_mix_asal, 'ASAL_LUAR_BP']
+            is_mix_25 = is_mix_asal & (out['TAHUN_PC_STR'] == "2025")
+            out.loc[is_mix_25, 'PC2025_BKS_PBCK3'] = out.loc[is_mix_25, 'ASAL_LUAR_BKS_PBCK3']
+            out.loc[is_mix_25, 'PC2025_BKS_MS'] = out.loc[is_mix_25, 'ASAL_LUAR_BKS_MS']
+            out.loc[is_mix_25, 'PC2025_CUKAI_PBCK3'] = out.loc[is_mix_25, 'ASAL_LUAR_CUKAI_PBCK3']
+            out.loc[is_mix_25, 'PC2025_CUKAI_MS'] = out.loc[is_mix_25, 'ASAL_LUAR_CUKAI_MS']
+            out.loc[is_mix_25, 'PC2025_BP'] = out.loc[is_mix_25, 'ASAL_LUAR_BP']
+        out['BUNGKUS_TMS'] = np.where(
+            out['STATUS_CK2_BOOL'] == "TERBIT",
+            (out[col_bks_pbck3] - out[col_bks_ck2]).clip(lower=0),
+            0.0
+        )
+
+    if giat_choice == "Pengolahan Kembali":
+        out = out[out['KEGIATAN_LOKASI_STR'] == "Pengolahan Kembali"].copy()
+    elif giat_choice == "Semua Pemusnahan (Gabungan)":
+        out = out[out['KEGIATAN_LOKASI_STR'].isin(["Pemusnahan - Dalam Pabrik", "Pemusnahan - Luar Pabrik"])].copy()
+    elif giat_choice == "Pemusnahan - Dalam Pabrik":
+        out = out[out['KEGIATAN_LOKASI_STR'] == "Pemusnahan - Dalam Pabrik"].copy()
+    elif giat_choice == "Pemusnahan - Luar Pabrik":
+        out = out[out['KEGIATAN_LOKASI_STR'] == "Pemusnahan - Luar Pabrik"].copy()
+
     return out
 
 # ==============================================================================
@@ -1197,17 +1526,18 @@ elif mode_periode == "Kumulatif (s.d. Bulan)":
     )
     df_period_all = df_period_all[cond_terbit_all | cond_proses_all]
 
-# Terapkan filter sekunder Tahun Pita Cukai pada df_period_all
+# Terapkan filter sekunder Tahun Pita Cukai serta Filter Asal BKC & Kegiatan/Lokasi pada df_period_all
 df_period_all = apply_tahun_pc_filter(df_period_all, selected_tahun_pc)
+df_period_all = apply_taxonomy_filters(df_period_all, selected_asal_bkc, selected_kegiatan)
 
-# Hitung Grand Total KPPBC & Tabel Peringkat Pabrik dari df_period_all
-grand_total_cukai_ck2 = df_period_all[col_cukai_ck2].sum() if col_cukai_ck2 in df_period_all.columns else 0
+# Hitung Grand Total KPPBC & Tabel Peringkat Pabrik dari df_period_all (murni dari dokumen TERBIT untuk Realisasi CK-2)
 df_period_terbit_all = df_period_all[df_period_all['STATUS_CK2_BOOL'] == "TERBIT"]
+grand_total_cukai_ck2 = df_period_terbit_all[col_cukai_ck2].sum() if col_cukai_ck2 in df_period_terbit_all.columns else 0.0
 grand_total_dok_ck2 = df_period_terbit_all[df_period_terbit_all[col_ck2] != "-"][col_ck2].nunique() if col_ck2 in df_period_all.columns else 0
 
-if col_pabrik in df_period_all.columns and col_cukai_ck2 in df_period_all.columns and not df_period_all.empty:
+if col_pabrik in df_period_terbit_all.columns and col_cukai_ck2 in df_period_terbit_all.columns and not df_period_terbit_all.empty:
     df_all_pabrik_rank = (
-        df_period_all.groupby(col_pabrik)[col_cukai_ck2]
+        df_period_terbit_all.groupby(col_pabrik)[col_cukai_ck2]
         .sum()
         .reset_index()
     )
@@ -1229,15 +1559,18 @@ else:
     df_filtered = df_period_all.copy()
 
 # ==============================================================================
-# PERHITUNGAN METRIK EKSEKUTIF, BREAKDOWN PC 2025 vs 2026 & KECEPATAN LAYANAN
+# PERHITUNGAN METRIK EKSEKUTIF, PEMISAHAN POPULASI TERBIT vs PROSES & KECEPATAN SLA
 # ==============================================================================
 valid_agenda = df_filtered[df_filtered[col_agenda] != "-"][col_agenda] if col_agenda in df_filtered.columns else pd.Series(dtype='str')
 valid_pbck3 = df_filtered[df_filtered[col_pbck3] != "-"][col_pbck3] if col_pbck3 in df_filtered.columns else pd.Series(dtype='str')
 total_pbck3 = max(valid_agenda.nunique(), valid_pbck3.nunique(), len(df_filtered))
 
-df_terbit_filtered = df_filtered[df_filtered['STATUS_CK2_BOOL'] == "TERBIT"]
+# PEMISAHAN POPULASI EKSPLISIT: df_terbit_filtered (Selesai CK-2) vs df_proses_filtered (Outstanding / Proses)
+df_terbit_filtered = df_filtered[df_filtered['STATUS_CK2_BOOL'] == "TERBIT"].copy()
+df_proses_filtered = df_filtered[df_filtered['STATUS_CK2_BOOL'] == "PROSES"].copy()
+
 total_ck2 = df_terbit_filtered[df_terbit_filtered[col_ck2] != "-"][col_ck2].nunique() if col_ck2 in df_filtered.columns else 0
-total_outstanding = int((df_filtered['STATUS_CK2_BOOL'] == "PROSES").sum())
+total_outstanding = int(len(df_proses_filtered))
 persen_selesai = (total_ck2 / total_pbck3 * 100) if total_pbck3 > 0 else 0.0
 persen_outstanding = (total_outstanding / total_pbck3 * 100) if total_pbck3 > 0 else 0.0
 
@@ -1267,10 +1600,11 @@ else:
 mix_pbck3_lbl = f" (+{pbck3_pc_mix} Mix)" if pbck3_pc_mix > 0 else ""
 mix_ck2_lbl = f" (+{ck2_pc_mix} Mix)" if ck2_pc_mix > 0 else ""
 
-# Perhitungan Kecepatan Layanan (SLA Speed): Murni dari TANGGAL_BACK-3 ke TGL_CK-2
+# PERBAIKAN #2: Perhitungan Kecepatan Layanan (SLA Speed): HARI KERJA (HK) sebagai Angka Utama!
 avg_sla_val = None
 avg_sla_hk_val = None
 avg_sla_num_str = "-"
+avg_sla_hk_num_str = "-"
 avg_sla_str = "- Hari"
 avg_sla_hk_str = "- Hari Kerja"
 
@@ -1289,18 +1623,29 @@ if not df_terbit_filtered.empty and col_tgl_ck2 in df_terbit_filtered.columns an
             d_end = valid_sla_df[col_tgl_ck2].values.astype('datetime64[D]')
             hk_arr = np.busday_count(d_start, d_end)
             avg_sla_hk_val = float(np.mean(hk_arr))
-            avg_sla_hk_str = f"{avg_sla_hk_val:.1f}".replace(".", ",") + " HK"
+            avg_sla_hk_num_str = f"{avg_sla_hk_val:.1f}".replace(".", ",")
+            avg_sla_hk_str = f"{avg_sla_hk_num_str} HK"
 
-cukai_pbck3_val = df_filtered[col_cukai_pbck3].sum() if col_cukai_pbck3 in df_filtered.columns else 0
-cukai_ck2_val = df_filtered[col_cukai_ck2].sum() if col_cukai_ck2 in df_filtered.columns else 0
-selisih_fisik = cukai_pbck3_val - cukai_ck2_val
-biaya_pengganti = df_filtered[col_biaya_pengganti].sum() if col_biaya_pengganti in df_filtered.columns else 0
+# PERBAIKAN AKUNTANSI #1: Pemisahan Nilai Pengajuan (100% PBCK-3) vs Realisasi (TERBIT) vs On-Process (PROSES) vs Selisih TMS Murni (TERBIT)
+cukai_pbck3_val = df_filtered[col_cukai_pbck3].sum() if col_cukai_pbck3 in df_filtered.columns else 0.0
+total_bks_pbck3 = df_filtered[col_bks_pbck3].sum() if col_bks_pbck3 in df_filtered.columns else 0.0
 
-total_bks_pbck3 = df_filtered[col_bks_pbck3].sum() if col_bks_pbck3 in df_filtered.columns else 0
-total_bks_ck2 = df_filtered[col_bks_ck2].sum() if col_bks_ck2 in df_filtered.columns else 0
-total_bks_tms = max(total_bks_pbck3 - total_bks_ck2, 0)
+cukai_ck2_val = df_terbit_filtered[col_cukai_ck2].sum() if col_cukai_ck2 in df_terbit_filtered.columns else 0.0
+total_bks_ck2 = df_terbit_filtered[col_bks_ck2].sum() if col_bks_ck2 in df_terbit_filtered.columns else 0.0
 
-# Breakdown Nilai Rupiah & Kemasan Bungkus untuk PC 2025 vs PC 2026 (dari item Sheet DETAIL + Dokumen)
+cukai_on_process = df_proses_filtered[col_cukai_pbck3].sum() if col_cukai_pbck3 in df_proses_filtered.columns else 0.0
+bks_on_process = df_proses_filtered[col_bks_pbck3].sum() if col_bks_pbck3 in df_proses_filtered.columns else 0.0
+
+selisih_fisik = max((df_terbit_filtered[col_cukai_pbck3].sum() - cukai_ck2_val), 0.0) if not df_terbit_filtered.empty else 0.0
+total_bks_tms = max((df_terbit_filtered[col_bks_pbck3].sum() - total_bks_ck2), 0.0) if not df_terbit_filtered.empty else 0.0
+
+biaya_pengganti = df_filtered[col_biaya_pengganti].sum() if col_biaya_pengganti in df_filtered.columns else 0.0
+
+rasio_bks_ms = (total_bks_ck2 / total_bks_pbck3 * 100) if total_bks_pbck3 > 0 else 0.0
+rasio_bks_tms = (total_bks_tms / total_bks_pbck3 * 100) if total_bks_pbck3 > 0 else 0.0
+rasio_bks_proses = (bks_on_process / total_bks_pbck3 * 100) if total_bks_pbck3 > 0 else 0.0
+
+# Breakdown Nilai Rupiah & Kemasan Bungkus untuk PC 2025 vs PC 2026 (PBCK-3 dari df_filtered, CK-2 MS dari df_terbit_filtered)
 if selected_tahun_pc == "Pita Cukai 2025":
     val_pbck3_2025, val_pbck3_2026 = cukai_pbck3_val, 0.0
     val_ck2_2025, val_ck2_2026 = cukai_ck2_val, 0.0
@@ -1314,12 +1659,12 @@ elif selected_tahun_pc == "Pita Cukai 2026":
 else:
     val_pbck3_2025 = df_filtered['PC2025_CUKAI_PBCK3'].sum()
     val_pbck3_2026 = df_filtered['PC2026_CUKAI_PBCK3'].sum()
-    val_ck2_2025 = df_filtered['PC2025_CUKAI_MS'].sum()
-    val_ck2_2026 = df_filtered['PC2026_CUKAI_MS'].sum()
+    val_ck2_2025 = df_terbit_filtered['PC2025_CUKAI_MS'].sum()
+    val_ck2_2026 = df_terbit_filtered['PC2026_CUKAI_MS'].sum()
     bks_pbck3_2025 = df_filtered['PC2025_BKS_PBCK3'].sum()
     bks_pbck3_2026 = df_filtered['PC2026_BKS_PBCK3'].sum()
-    bks_ms_2025 = df_filtered['PC2025_BKS_MS'].sum()
-    bks_ms_2026 = df_filtered['PC2026_BKS_MS'].sum()
+    bks_ms_2025 = df_terbit_filtered['PC2025_BKS_MS'].sum()
+    bks_ms_2026 = df_terbit_filtered['PC2026_BKS_MS'].sum()
 
 persen_pbck3_2025 = (val_pbck3_2025 / cukai_pbck3_val * 100) if cukai_pbck3_val > 0 else 0.0
 persen_pbck3_2026 = (val_pbck3_2026 / cukai_pbck3_val * 100) if cukai_pbck3_val > 0 else 0.0
@@ -1328,7 +1673,7 @@ persen_ck2_2026 = (val_ck2_2026 / cukai_ck2_val * 100) if cukai_ck2_val > 0 else
 
 # Perhitungan Porsi Kontribusi & Ranking Pabrik Terpilih terhadap Grand Total KPPBC
 val_selected = cukai_ck2_val
-val_others = max(grand_total_cukai_ck2 - val_selected, 0)
+val_others = max(grand_total_cukai_ck2 - val_selected, 0.0)
 porsi_persen = (val_selected / grand_total_cukai_ck2 * 100) if grand_total_cukai_ck2 > 0 else 0.0
 porsi_persen_str = f"{porsi_persen:.2f}".replace(".", ",")
 dok_persen = (total_ck2 / grand_total_dok_ck2 * 100) if grand_total_dok_ck2 > 0 else 0.0
@@ -1340,8 +1685,66 @@ if selected_pabrik != "Semua Pabrik" and not df_all_pabrik_rank.empty:
     if not match_rank.empty:
         selected_rank_int = int(match_rank['RANK'].iloc[0])
 
-rasio_bks_ms = (total_bks_ck2 / total_bks_pbck3 * 100) if total_bks_pbck3 > 0 else 0.0
-rasio_bks_tms = (total_bks_tms / total_bks_pbck3 * 100) if total_bks_pbck3 > 0 else 0.0
+# ==============================================================================
+# PERHITUNGAN METRIK ZONA 3B: ASAL BKC & KEGIATAN/LOKASI PEMUSNAHAN
+# ==============================================================================
+if selected_asal_bkc == "Dalam Pabrik":
+    dok_asal_dalam = total_pbck3
+    dok_asal_luar = 0
+    dok_asal_mix = 0
+    val_asal_dalam = cukai_pbck3_val
+    val_asal_luar = 0.0
+    bks_asal_dalam = total_bks_pbck3
+    bks_asal_luar = 0.0
+elif selected_asal_bkc == "Peredaran Bebas (Luar Pabrik)":
+    dok_asal_dalam = 0
+    dok_asal_luar = total_pbck3
+    dok_asal_mix = 0
+    val_asal_dalam = 0.0
+    val_asal_luar = cukai_pbck3_val
+    bks_asal_dalam = 0.0
+    bks_asal_luar = total_bks_pbck3
+else:
+    dok_asal_dalam = int((df_filtered['ASAL_BKC_STR'] == "Dalam Pabrik").sum())
+    dok_asal_luar = int((df_filtered['ASAL_BKC_STR'] == "Peredaran Bebas (Luar Pabrik)").sum())
+    dok_asal_mix = int((df_filtered['ASAL_BKC_STR'] == "Dalam & Luar Pabrik").sum())
+    if selected_tahun_pc == "Semua Tahun PC (Gabungan)":
+        val_asal_dalam = df_filtered['ASAL_DALAM_CUKAI_PBCK3'].sum()
+        val_asal_luar = df_filtered['ASAL_LUAR_CUKAI_PBCK3'].sum()
+        bks_asal_dalam = df_filtered['ASAL_DALAM_BKS_PBCK3'].sum()
+        bks_asal_luar = df_filtered['ASAL_LUAR_BKS_PBCK3'].sum()
+    else:
+        # Proporsional terhadap filter Tahun PC aktif
+        tot_orig_cukai = (df_filtered['ASAL_DALAM_CUKAI_PBCK3'] + df_filtered['ASAL_LUAR_CUKAI_PBCK3']).replace(0, np.nan)
+        tot_orig_bks = (df_filtered['ASAL_DALAM_BKS_PBCK3'] + df_filtered['ASAL_LUAR_BKS_PBCK3']).replace(0, np.nan)
+        val_asal_dalam = (df_filtered[col_cukai_pbck3] * (df_filtered['ASAL_DALAM_CUKAI_PBCK3'] / tot_orig_cukai)).fillna(0.0).sum()
+        val_asal_luar = (df_filtered[col_cukai_pbck3] * (df_filtered['ASAL_LUAR_CUKAI_PBCK3'] / tot_orig_cukai)).fillna(0.0).sum()
+        bks_asal_dalam = (df_filtered[col_bks_pbck3] * (df_filtered['ASAL_DALAM_BKS_PBCK3'] / tot_orig_bks)).fillna(0.0).sum()
+        bks_asal_luar = (df_filtered[col_bks_pbck3] * (df_filtered['ASAL_LUAR_BKS_PBCK3'] / tot_orig_bks)).fillna(0.0).sum()
+
+persen_asal_dalam = (val_asal_dalam / cukai_pbck3_val * 100) if cukai_pbck3_val > 0 else 0.0
+persen_asal_luar = (val_asal_luar / cukai_pbck3_val * 100) if cukai_pbck3_val > 0 else 0.0
+mix_asal_note = f" (+{dok_asal_mix} Mix CK-1/CK-5)" if dok_asal_mix > 0 else ""
+
+# Metrik Kegiatan & Lokasi Pemusnahan (Pengolahan Kembali vs Pemusnahan Dalam Pabrik vs Pemusnahan Luar Pabrik)
+df_giat_olah = df_filtered[df_filtered['KEGIATAN_LOKASI_STR'] == "Pengolahan Kembali"]
+df_giat_musnah_dlm = df_filtered[df_filtered['KEGIATAN_LOKASI_STR'] == "Pemusnahan - Dalam Pabrik"]
+df_giat_musnah_luar = df_filtered[df_filtered['KEGIATAN_LOKASI_STR'] == "Pemusnahan - Luar Pabrik"]
+
+dok_giat_olah = len(df_giat_olah)
+val_giat_olah = df_giat_olah[col_cukai_pbck3].sum() if col_cukai_pbck3 in df_giat_olah.columns else 0.0
+bks_giat_olah = df_giat_olah[col_bks_pbck3].sum() if col_bks_pbck3 in df_giat_olah.columns else 0.0
+persen_giat_olah = (val_giat_olah / cukai_pbck3_val * 100) if cukai_pbck3_val > 0 else 0.0
+
+dok_giat_musnah_dlm = len(df_giat_musnah_dlm)
+val_giat_musnah_dlm = df_giat_musnah_dlm[col_cukai_pbck3].sum() if col_cukai_pbck3 in df_giat_musnah_dlm.columns else 0.0
+bks_giat_musnah_dlm = df_giat_musnah_dlm[col_bks_pbck3].sum() if col_bks_pbck3 in df_giat_musnah_dlm.columns else 0.0
+persen_giat_musnah_dlm = (val_giat_musnah_dlm / cukai_pbck3_val * 100) if cukai_pbck3_val > 0 else 0.0
+
+dok_giat_musnah_luar = len(df_giat_musnah_luar)
+val_giat_musnah_luar = df_giat_musnah_luar[col_cukai_pbck3].sum() if col_cukai_pbck3 in df_giat_musnah_luar.columns else 0.0
+bks_giat_musnah_luar = df_giat_musnah_luar[col_bks_pbck3].sum() if col_bks_pbck3 in df_giat_musnah_luar.columns else 0.0
+persen_giat_musnah_luar = (val_giat_musnah_luar / cukai_pbck3_val * 100) if cukai_pbck3_val > 0 else 0.0
 
 visual_periode_lbl = f"Tahun Anggaran {selected_tahun}"
 if mode_periode == "Bulanan Tunggal (Single Month)":
@@ -1355,7 +1758,7 @@ visual_pc_pill_lbl = (
     else f"PC: {selected_tahun_pc.replace('Pita Cukai ', 'Tahun ')}"
 )
 
-# Ringkasan Cepat SLA & Tombol Refresh di Bawah Sidebar
+# Ringkasan Cepat SLA & Tombol Refresh di Bawah Sidebar (Rata-rata Hari Kerja sebagai Utama)
 with st.sidebar:
     st.markdown("---")
     st.markdown(f"""
@@ -1363,9 +1766,9 @@ with st.sidebar:
         <div style="font-weight:800; color:#38BDF8; margin-bottom:4px;">📌 RINGKASAN KEPATUHAN SLA</div>
         <div style="color:#E2E8F0; line-height:1.55;">
             • Formula: <b>Tgl CK-2 − Tgl BACK-3</b><br>
-            • Rata-rata Kalender: <b>{avg_sla_str}</b><br>
-            • Rata-rata Hari Kerja: <b>{avg_sla_hk_str}</b><br>
-            • Standar PER-2/BC/2026: <b>Maks 10 HK</b><br>
+            • Rata-rata Hari Kerja: <b>{avg_sla_hk_str}</b> (Maks 10 HK)<br>
+            • Setara Kalender: <b>≈ {avg_sla_str} Kalender</b><br>
+            • Standar PER-2/BC/2026: <b>Maks 10 HK (Pasal 7)</b><br>
             • Berkas Outstanding: <b>{total_outstanding} Dokumen</b>
         </div>
     </div>
@@ -1381,7 +1784,25 @@ with st.sidebar:
 rekon_pill_html = (
     '<span class="status-pill pill-green">✅ Rekonsiliasi: Fisik 100% Sesuai</span>'
     if selisih_fisik == 0
-    else f'<span class="status-pill pill-red">⚠️ Selisih TMS: {fmt_exact_rp(-selisih_fisik)} ({fmt_exact_bks(total_bks_tms)} Bks)</span>'
+    else f'<span class="status-pill pill-red">⚠️ Selisih TMS Murni: {fmt_exact_rp(-selisih_fisik)} ({fmt_exact_bks(total_bks_tms)} Bks)</span>'
+)
+
+proses_pill_html = (
+    f'<span class="status-pill pill-amber">⏳ On-Process ({total_outstanding} Dok): {fmt_miliar_short(cukai_on_process)}</span>'
+    if total_outstanding > 0
+    else ""
+)
+
+asal_pill_html = (
+    f'<span class="status-pill pill-purple">🏭 Asal: {selected_asal_bkc}</span>'
+    if selected_asal_bkc != "Semua Asal BKC (Gabungan)"
+    else ""
+)
+
+giat_pill_html = (
+    f'<span class="status-pill pill-purple">🔥 Kegiatan: {selected_kegiatan}</span>'
+    if selected_kegiatan != "Semua Kegiatan (Gabungan)"
+    else ""
 )
 
 st.markdown(f"""
@@ -1399,13 +1820,16 @@ st.markdown(f"""
     <div class="header-pills">
         <span class="status-pill pill-blue">🗓️ {visual_periode_lbl}</span>
         <span class="status-pill pill-amber">🏷️ {visual_pc_pill_lbl}</span>
+        {asal_pill_html}
+        {giat_pill_html}
         <span class="status-pill">🏢 {selected_pabrik}</span>
         {rekon_pill_html}
+        {proses_pill_html}
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# ZONA 1: st.columns(4) untuk 4 Kartu KPI Utama bergaya Adminty + Mini-Breakdown Tahun PC
+# ZONA 1: st.columns(4) untuk 4 Kartu KPI Utama bergaya Adminty + Mini-Breakdown Tahun PC & On-Process
 z1_c1, z1_c2, z1_c3, z1_c4 = st.columns(4)
 
 with z1_c1:
@@ -1445,13 +1869,18 @@ with z1_c2:
     """.replace(",", "."), unsafe_allow_html=True)
 
 with z1_c3:
+    subnote_outstanding_html = (
+        f'<span class="pc-mini-badge">⏳ Nilai Proses: {fmt_miliar_short(cukai_on_process)} ({fmt_exact_bks(bks_on_process)} Bks)</span>'
+        if total_outstanding > 0
+        else "Seluruh berkas telah terbit CK-2"
+    )
     st.markdown(f"""
     <div class="adminty-card">
         <div class="adminty-body">
             <div>
                 <div class="adminty-title">Outstanding / Dalam Proses</div>
                 <div class="adminty-value">{total_outstanding:,.0f} <span class="adminty-unit">Dokumen</span></div>
-                <div class="adminty-subnote">Menunggu penyelesaian CK-2</div>
+                <div class="adminty-subnote">{subnote_outstanding_html}</div>
             </div>
             <div class="adminty-icon-circle icon-rose">⏳</div>
         </div>
@@ -1460,7 +1889,7 @@ with z1_c3:
             <span>{persen_outstanding:.1f}% Beban Kerja</span>
         </div>
     </div>
-    """.replace(",", "."), unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
 with z1_c4:
     sla_check_val = avg_sla_hk_val if avg_sla_hk_val is not None else avg_sla_val
@@ -1474,8 +1903,8 @@ with z1_c4:
         <div class="adminty-body">
             <div>
                 <div class="adminty-title">Kecepatan Layanan (BACK-3 ➔ CK-2)</div>
-                <div class="adminty-value">{avg_sla_num_str} <span class="adminty-unit">Hari</span></div>
-                <div class="adminty-subnote">≈ {avg_sla_hk_str} (Maks 10 HK Pasal 7)</div>
+                <div class="adminty-value">{avg_sla_hk_num_str} <span class="adminty-unit">Hari Kerja</span></div>
+                <div class="adminty-subnote">Standar Maks. 10 HK (Pasal 7) &bull; ≈ {avg_sla_num_str} Hari Kalender</div>
             </div>
             <div class="adminty-icon-circle icon-cyan">⚡</div>
         </div>
@@ -1496,29 +1925,68 @@ with col_main_chart:
         st.markdown(f"""
         <div style="padding: 6px 10px 0 10px;">
             <div class="section-title">📈 Tren Realisasi CK-2 per Bulan ({selected_tahun})</div>
-            <div class="section-caption">Visualisasi volume dokumen CK-2 terbit & nilai realisasi cukai (MS) — Entitas: <b>{selected_pabrik}</b> | <b>{visual_pc_pill_lbl}</b></div>
+            <div class="section-caption">Visualisasi volume dokumen CK-2 terbit, info berkas proses & nilai realisasi cukai (MS) — Entitas: <b>{selected_pabrik}</b> | <b>{visual_pc_pill_lbl}</b></div>
         </div>
         """, unsafe_allow_html=True)
 
-        # BUG FIX #4 & TANGGAL: Sinkronkan Grafik Tren Bulanan dengan Filter Pabrik, Tahun & Tahun PC
-        df_terbit_trend = apply_tahun_pc_filter(df[df['STATUS_CK2_BOOL'] == "TERBIT"].copy(), selected_tahun_pc)
+        # Saring data Grafik Tren Bulanan agar sinkron dengan Pabrik, Tahun, Tahun PC, Asal BKC & Kegiatan
+        df_base_trend = apply_tahun_pc_filter(df.copy(), selected_tahun_pc)
+        df_base_trend = apply_taxonomy_filters(df_base_trend, selected_asal_bkc, selected_kegiatan)
         if selected_pabrik != "Semua Pabrik":
-            df_terbit_trend = df_terbit_trend[df_terbit_trend[col_pabrik].astype(str).str.strip() == selected_pabrik]
+            df_base_trend = df_base_trend[df_base_trend[col_pabrik].astype(str).str.strip() == selected_pabrik]
+
+        df_terbit_trend = df_base_trend[df_base_trend['STATUS_CK2_BOOL'] == "TERBIT"].copy()
         if 'TAHUN_CK2' in df_terbit_trend.columns:
             df_terbit_trend = df_terbit_trend[df_terbit_trend['TAHUN_CK2'] == selected_tahun]
 
-        if not df_terbit_trend.empty and 'BULAN_CK2_ANGKA' in df_terbit_trend.columns:
-            df_trend = (
-                df_terbit_trend.dropna(subset=['BULAN_CK2_ANGKA'])
-                .groupby('BULAN_CK2_ANGKA')
-                .agg(CK2=(col_ck2, 'nunique'), TOTAL_CUKAI=(col_cukai_ck2, 'sum'))
-                .reset_index()
-            )
-            df_trend['BULAN_CK2_ANGKA'] = df_trend['BULAN_CK2_ANGKA'].astype(int)
-            df_trend = df_trend.sort_values(by='BULAN_CK2_ANGKA')
-            df_trend['BULAN'] = df_trend['BULAN_CK2_ANGKA'].map(INDO_BULAN)
+        df_proses_trend = df_base_trend[df_base_trend['STATUS_CK2_BOOL'] == "PROSES"].copy()
+        if 'TAHUN_ACUAN' in df_proses_trend.columns:
+            df_proses_trend = df_proses_trend[df_proses_trend['TAHUN_ACUAN'] == selected_tahun]
+
+        if (not df_terbit_trend.empty and 'BULAN_CK2_ANGKA' in df_terbit_trend.columns) or (not df_proses_trend.empty and 'BULAN_ACUAN' in df_proses_trend.columns):
+            if not df_terbit_trend.empty:
+                df_trend_terbit = (
+                    df_terbit_trend.dropna(subset=['BULAN_CK2_ANGKA'])
+                    .groupby('BULAN_CK2_ANGKA')
+                    .agg(CK2=(col_ck2, 'nunique'), TOTAL_CUKAI=(col_cukai_ck2, 'sum'))
+                    .reset_index()
+                    .rename(columns={'BULAN_CK2_ANGKA': 'BULAN_NUM'})
+                )
+            else:
+                df_trend_terbit = pd.DataFrame(columns=['BULAN_NUM', 'CK2', 'TOTAL_CUKAI'])
+
+            if not df_proses_trend.empty:
+                df_trend_proses = (
+                    df_proses_trend.dropna(subset=['BULAN_ACUAN'])
+                    .groupby('BULAN_ACUAN')
+                    .agg(PROSES_CNT=(col_agenda, 'count'), PROSES_CUKAI=(col_cukai_pbck3, 'sum'))
+                    .reset_index()
+                    .rename(columns={'BULAN_ACUAN': 'BULAN_NUM'})
+                )
+            else:
+                df_trend_proses = pd.DataFrame(columns=['BULAN_NUM', 'PROSES_CNT', 'PROSES_CUKAI'])
+
+            df_trend = pd.merge(df_trend_terbit, df_trend_proses, on='BULAN_NUM', how='outer').fillna(0)
+            df_trend['BULAN_NUM'] = df_trend['BULAN_NUM'].astype(int)
+            df_trend['CK2'] = df_trend['CK2'].astype(int)
+            df_trend['PROSES_CNT'] = df_trend['PROSES_CNT'].astype(int)
+            df_trend = df_trend.sort_values(by='BULAN_NUM')
+            df_trend['BULAN'] = df_trend['BULAN_NUM'].map(INDO_BULAN)
             df_trend['CUKAI_STR'] = df_trend['TOTAL_CUKAI'].map(fmt_exact_rp)
-            df_trend['CUKAI_SHORT'] = df_trend['TOTAL_CUKAI'].map(fmt_miliar_short)
+            df_trend['PROSES_INFO_HOVER'] = df_trend.apply(
+                lambda r: f"<br>⏳ Dalam Proses: <b>{int(r['PROSES_CNT'])} Berkas ({fmt_exact_rp(r['PROSES_CUKAI'])})</b>" if r['PROSES_CNT'] > 0 else "",
+                axis=1
+            )
+            df_trend['BAR_LABEL'] = df_trend.apply(
+                lambda r: f"{int(r['CK2'])} Dok (+{int(r['PROSES_CNT'])} Proses)" if r['PROSES_CNT'] > 0 else f"{int(r['CK2'])} Dok",
+                axis=1
+            )
+
+            # Hitung tick dinamis sumbu Y kanan (Format Bahasa Indonesia Rp X,X M / Jt tanpa 'B')
+            max_cukai_val = float(df_trend['TOTAL_CUKAI'].max()) if not df_trend.empty else 0.0
+            y2_max = max_cukai_val * 1.18 if max_cukai_val > 0 else 1_000_000_000.0
+            y2_tickvals = np.linspace(0, y2_max, 5).tolist()
+            y2_ticktext = [fmt_axis_rp_indo(v) for v in y2_tickvals]
 
             fig_trend = go.Figure()
             fig_trend.add_trace(go.Bar(
@@ -1526,10 +1994,10 @@ with col_main_chart:
                 y=df_trend['CK2'],
                 name='Dokumen CK-2 Terbit',
                 marker=dict(color='#3B82F6' if is_night_mode else '#2563EB', cornerradius=6),
-                text=df_trend['CK2'].map(lambda v: f"{v} Dok"),
+                text=df_trend['BAR_LABEL'],
                 textposition='outside',
-                customdata=df_trend['CUKAI_STR'],
-                hovertemplate="<b>Bulan %{x}</b><br>Dokumen CK-2 Terbit: <b>%{y} Dokumen</b><br>Total Realisasi Cukai (MS): <b>%{customdata}</b><extra></extra>"
+                customdata=np.stack([df_trend['CUKAI_STR'], df_trend['PROSES_INFO_HOVER']], axis=-1),
+                hovertemplate="<b>Bulan %{x}</b><br>Dokumen CK-2 Terbit: <b>%{y} Dokumen</b><br>Total Realisasi Cukai (MS): <b>%{customdata[0]}</b>%{customdata[1]}<extra></extra>"
             ))
             fig_trend.add_trace(go.Scatter(
                 x=df_trend['BULAN'],
@@ -1541,10 +2009,10 @@ with col_main_chart:
                 fillcolor='rgba(16, 185, 129, 0.14)',
                 line=dict(color='#10B981' if is_night_mode else '#059669', width=2.8),
                 marker=dict(size=8, color='#10B981' if is_night_mode else '#059669', line=dict(width=2, color=card_bg)),
-                customdata=df_trend['CUKAI_STR'],
-                hovertemplate="<b>Bulan %{x}</b><br>Realisasi Cukai (MS): <b>%{customdata}</b><extra></extra>"
+                customdata=np.stack([df_trend['CUKAI_STR'], df_trend['PROSES_INFO_HOVER']], axis=-1),
+                hovertemplate="<b>Bulan %{x}</b><br>Realisasi Cukai (MS): <b>%{customdata[0]}</b>%{customdata[1]}<extra></extra>"
             ))
-            max_ck2_bar = max(df_trend['CK2'].max(), 1)
+            max_ck2_bar = max(int(df_trend['CK2'].max()), 1)
             fig_trend.update_layout(
                 paper_bgcolor='rgba(0,0,0,0)',
                 plot_bgcolor='rgba(0,0,0,0)',
@@ -1561,7 +2029,7 @@ with col_main_chart:
                     title="Jumlah Dokumen",
                     gridcolor=chart_grid,
                     zeroline=False,
-                    range=[0, max_ck2_bar * 1.22],
+                    range=[0, max_ck2_bar * 1.25],
                     tickfont=dict(color=chart_font)
                 ),
                 yaxis2=dict(
@@ -1570,6 +2038,10 @@ with col_main_chart:
                     side='right',
                     showgrid=False,
                     zeroline=False,
+                    range=[0, y2_max],
+                    tickmode='array',
+                    tickvals=y2_tickvals,
+                    ticktext=y2_ticktext,
                     tickfont=dict(color=chart_font)
                 ),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color=chart_font)),
@@ -1578,14 +2050,21 @@ with col_main_chart:
             )
             st.plotly_chart(fig_trend, use_container_width=True)
         else:
-            st.info("Belum ada data dokumen CK-2 yang berstatus TERBIT pada filter pabrik/tahun ini.")
+            st.info("Belum ada data dokumen CK-2 pada filter pabrik/tahun ini.")
 
-# ZONA 2 KANAN: 3 KARTU FINANSIAL DENGAN BREAKDOWN PC 2025 vs PC 2026 & BADGE PORSI
+# ZONA 2 KANAN: 3 KARTU FINANSIAL DENGAN REKONSILIASI AKUNTANSI PRESISI & BREAKDOWN PC 2025 vs 2026
 with col_side_kpis:
+    badge_pbck3_total = f'<span class="badge-info">Total {total_pbck3} Berkas PBCK-3</span>'
+    badge_pbck3_proses = (
+        f'<span class="badge-warning">⏳ {total_outstanding} Proses: {fmt_miliar_short(cukai_on_process)}</span>'
+        if total_outstanding > 0
+        else ""
+    )
+
     badge_cukai_side = (
-        f'<span class="badge-danger">Selisih TMS: {fmt_exact_rp(-selisih_fisik)}</span>'
+        f'<span class="badge-danger">Selisih TMS Murni: {fmt_exact_rp(-selisih_fisik)} ({total_ck2} Dok Terbit)</span>'
         if selisih_fisik > 0
-        else '<span class="badge-success">100% Memenuhi Syarat</span>'
+        else f'<span class="badge-success">100% Memenuhi Syarat ({total_ck2} Dok Terbit)</span>'
     )
     badge_share_side = (
         f'<span class="badge-info">📊 Kontribusi: {porsi_persen_str}% Total KPPBC</span>'
@@ -1605,6 +2084,7 @@ with col_side_kpis:
         <div>
             <div class="fin-label">Nilai Pengajuan (PBCK-3)</div>
             <div class="fin-val">{fmt_kpi_rupiah(cukai_pbck3_val)}</div>
+            <div class="fin-sub">{badge_pbck3_total}{badge_pbck3_proses}</div>
             {pc_pbck3_strip_html}
         </div>
         <div class="fin-icon-box box-blue">📋</div>
@@ -1631,7 +2111,7 @@ with col_side_kpis:
     """, unsafe_allow_html=True)
 
 # ==============================================================================
-# ZONA 3: HORIZONTAL PROGRESS BAR STRIP (GAYA ADMINDEK — 4 KOLOM + RINCIAN PC)
+# ZONA 3: HORIZONTAL PROGRESS BAR STRIP (GAYA ADMINDEK — 4 KOLOM + RINCIAN PC & ON-PROCESS)
 # ==============================================================================
 with st.container(border=True):
     z3_c1, z3_c2, z3_c3, z3_c4 = st.columns(4)
@@ -1645,7 +2125,7 @@ with st.container(border=True):
                 <div class="progress-fill" style="width: 100%; background: #3B82F6;"></div>
             </div>
             <div class="progress-meta">
-                <span>Basis Pemberitahuan Fisik</span>
+                <span>Basis Pemberitahuan Fisik ({total_pbck3} Berkas)</span>
                 <span>100%</span>
             </div>
             <div class="progress-pc-sub">🏷️ PC 2025: {fmt_bks_short(bks_pbck3_2025)} &bull; PC 2026: {fmt_bks_short(bks_pbck3_2026)}</div>
@@ -1662,7 +2142,7 @@ with st.container(border=True):
                 <div class="progress-fill" style="width: {w_ms:.1f}%; background: #10B981;"></div>
             </div>
             <div class="progress-meta">
-                <span>Memenuhi Syarat Pengembalian</span>
+                <span>Memenuhi Syarat ({total_ck2} Dok Terbit)</span>
                 <span style="color:#10B981; font-weight:700;">{rasio_bks_ms:.1f}%</span>
             </div>
             <div class="progress-pc-sub">🏷️ PC 2025: {fmt_bks_short(bks_ms_2025)} &bull; PC 2026: {fmt_bks_short(bks_ms_2026)}</div>
@@ -1671,18 +2151,23 @@ with st.container(border=True):
 
     with z3_c3:
         w_tms = min(max(rasio_bks_tms, 0.0), 100.0)
+        sub_tms_proses_lbl = (
+            f"⏳ Belum Dilaksanakan / Proses: {fmt_exact_bks(bks_on_process)} Bks ({total_outstanding} Dok)"
+            if bks_on_process > 0
+            else "Selisih Pemeriksaan Fisik BACK-3 (Berkas Selesai)"
+        )
         st.markdown(f"""
         <div class="progress-strip-item">
-            <div class="progress-strip-label" style="color:#F43F5E;">❌ Kemasan Ditolak (TMS)</div>
+            <div class="progress-strip-label" style="color:#F43F5E;">❌ Kemasan Ditolak (TMS Murni)</div>
             <div class="progress-strip-val" style="color:#F43F5E;">{fmt_kpi_bungkus(total_bks_tms)}</div>
             <div class="progress-track">
                 <div class="progress-fill" style="width: {w_tms:.1f}%; background: #EF4444;"></div>
             </div>
             <div class="progress-meta">
                 <span>{'Tidak Mendapat Pengembalian' if total_bks_tms > 0 else 'Nihil Selisih (0 Bks)'}</span>
-                <span style="color:#F43F5E; font-weight:700;">{rasio_bks_tms:.1f}%</span>
+                <span style="color:#F43F5E; font-weight:700;">{rasio_bks_tms:.2f}%</span>
             </div>
-            <div class="progress-pc-sub">Selisih Pemeriksaan Fisik BACK-3</div>
+            <div class="progress-pc-sub">{sub_tms_proses_lbl}</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -1700,6 +2185,94 @@ with st.container(border=True):
                 <span style="color:#06B6D4; font-weight:700;">{persen_selesai:.1f}%</span>
             </div>
             <div class="progress-pc-sub">🏷️ Terbit PC 2025: {ck2_pc2025} Dok &bull; PC 2026: {ck2_pc2026} Dok{mix_ck2_lbl}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
+
+# ==============================================================================
+# ZONA 3B: EXECUTIVE TAXONOMY & LOCATION STRIP (ASAL BKC & KEGIATAN/LOKASI PEMUSNAHAN)
+# ==============================================================================
+col_tax_asal, col_tax_giat = st.columns(2)
+
+with col_tax_asal:
+    with st.container(border=True):
+        w_asal_dlm = min(max(persen_asal_dalam, 0.0), 100.0)
+        w_asal_luar = min(max(persen_asal_luar, 0.0), 100.0)
+        st.markdown(f"""
+        <div class="taxonomy-card-wrap">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+                <div class="section-title" style="font-size:14.5px;">🏭 Klasifikasi Asal BKC (PBCK-3): Dalam Pabrik vs Peredaran Bebas</div>
+                <span class="badge-info">Total: {total_pbck3} Berkas{mix_asal_note}</span>
+            </div>
+            <div class="taxonomy-bar-multi">
+                <div style="width:{w_asal_dlm:.1f}%; background:#2563EB;" title="Dalam Pabrik: {w_asal_dlm:.1f}%"></div>
+                <div style="width:{w_asal_luar:.1f}%; background:#F59E0B;" title="Peredaran Bebas (Luar Pabrik): {w_asal_luar:.1f}%"></div>
+            </div>
+            <div class="taxonomy-grid-2">
+                <div class="taxonomy-mini-box" style="border-left: 3.5px solid #2563EB;">
+                    <div class="tax-box-head">
+                        <span style="color:#2563EB;">🏢 Dalam Pabrik (CK-1)</span>
+                        <span class="badge-info">{dok_asal_dalam} Murni{f' +{dok_asal_mix} Mix' if dok_asal_mix > 0 else ''}</span>
+                    </div>
+                    <div class="tax-box-main">{fmt_miliar_short(val_asal_dalam)} <span style="font-size:11.5px; font-weight:700; color:#2563EB;">({persen_asal_dalam:.1f}%)</span></div>
+                    <div class="tax-box-sub">{fmt_exact_rp(val_asal_dalam)} &bull; <b>{fmt_exact_bks(bks_asal_dalam)} Bks</b></div>
+                </div>
+                <div class="taxonomy-mini-box" style="border-left: 3.5px solid #F59E0B;">
+                    <div class="tax-box-head">
+                        <span style="color:#D97706;">🚚 Peredaran Bebas / Luar (CK-5)</span>
+                        <span class="badge-warning">{dok_asal_luar} Murni{f' +{dok_asal_mix} Mix' if dok_asal_mix > 0 else ''}</span>
+                    </div>
+                    <div class="tax-box-main">{fmt_miliar_short(val_asal_luar)} <span style="font-size:11.5px; font-weight:700; color:#D97706;">({persen_asal_luar:.1f}%)</span></div>
+                    <div class="tax-box-sub">{fmt_exact_rp(val_asal_luar)} &bull; <b>{fmt_exact_bks(bks_asal_luar)} Bks</b></div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+with col_tax_giat:
+    with st.container(border=True):
+        w_g_olah = min(max(persen_giat_olah, 0.0), 100.0)
+        w_g_mdlm = min(max(persen_giat_musnah_dlm, 0.0), 100.0)
+        w_g_mluar = min(max(persen_giat_musnah_luar, 0.0), 100.0)
+        tot_musnah_dok = dok_giat_musnah_dlm + dok_giat_musnah_luar
+        st.markdown(f"""
+        <div class="taxonomy-card-wrap">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+                <div class="section-title" style="font-size:14.5px;">🔥 Rincian Kegiatan & Lokasi Pemusnahan BKC</div>
+                <span class="badge-danger">Total Pemusnahan: {tot_musnah_dok} Berkas ({dok_giat_musnah_luar} Luar Pabrik)</span>
+            </div>
+            <div class="taxonomy-bar-multi">
+                <div style="width:{w_g_olah:.1f}%; background:#10B981;" title="Pengolahan Kembali: {w_g_olah:.1f}%"></div>
+                <div style="width:{w_g_mdlm:.1f}%; background:#F59E0B;" title="Pemusnahan Dalam Pabrik: {w_g_mdlm:.1f}%"></div>
+                <div style="width:{w_g_mluar:.1f}%; background:#F43F5E;" title="Pemusnahan Luar Pabrik: {w_g_mluar:.1f}%"></div>
+            </div>
+            <div class="taxonomy-grid-3">
+                <div class="taxonomy-mini-box" style="border-left: 3.5px solid #10B981;">
+                    <div class="tax-box-head">
+                        <span style="color:#059669;">♻️ Olah Kembali</span>
+                        <span class="badge-success">{dok_giat_olah} Dok</span>
+                    </div>
+                    <div class="tax-box-main">{fmt_miliar_short(val_giat_olah)} <span style="font-size:11px; color:#059669;">({persen_giat_olah:.1f}%)</span></div>
+                    <div class="tax-box-sub"><b>{fmt_bks_short(bks_giat_olah)}</b></div>
+                </div>
+                <div class="taxonomy-mini-box" style="border-left: 3.5px solid #F59E0B;">
+                    <div class="tax-box-head">
+                        <span style="color:#D97706;">🏭 Musnah (Dalam)</span>
+                        <span class="badge-warning">{dok_giat_musnah_dlm} Dok</span>
+                    </div>
+                    <div class="tax-box-main">{fmt_miliar_short(val_giat_musnah_dlm)} <span style="font-size:11px; color:#D97706;">({persen_giat_musnah_dlm:.1f}%)</span></div>
+                    <div class="tax-box-sub"><b>{fmt_bks_short(bks_giat_musnah_dlm)}</b></div>
+                </div>
+                <div class="taxonomy-mini-box-rose" style="border-left: 3.5px solid #F43F5E;">
+                    <div class="tax-box-head">
+                        <span style="color:#E11D48;">🚨 Musnah (Luar)</span>
+                        <span class="badge-danger">{dok_giat_musnah_luar} Dok</span>
+                    </div>
+                    <div class="tax-box-main" style="color:#E11D48;">{fmt_miliar_short(val_giat_musnah_luar)} <span style="font-size:11px;">({persen_giat_musnah_luar:.1f}%)</span></div>
+                    <div class="tax-box-sub"><b>{fmt_bks_short(bks_giat_musnah_luar)}</b></div>
+                </div>
+            </div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -1843,7 +2416,7 @@ with col_sla_radar:
                 df_proses['SISA_HARI_INT'] = parse_sisa_hari(df_proses[col_tempo])
                 df_proses["TGL_PBCK-3_WARN"] = df_proses[col_tgl_pbck3].dt.strftime('%d/%m/%Y').fillna("-") if col_tgl_pbck3 in df_proses.columns else "-"
                 df_proses["TGL_BACK-3_WARN"] = df_proses[col_tgl_back3].dt.strftime('%d/%m/%Y').fillna("-") if col_tgl_back3 in df_proses.columns else "-"
-                df_proses["SISA_HARI_STR"] = df_proses['SISA_HARI_INT'].map(lambda x: f"{x:.0f} Hari Kerja" if pd.notnull(x) else "Menunggu BACK-3")
+                df_proses["SISA_HARI_STR"] = df_proses['SISA_HARI_INT'].map(lambda x: f"{x:.0f} Hari Kerja" if pd.notnull(x) else "Menunggu Pelaksanaan / BACK-3")
 
                 warn_rename = {
                     col_agenda: "Agenda",
@@ -1852,13 +2425,13 @@ with col_sla_radar:
                     "TGL_PBCK-3_WARN": "Tgl PBCK-3",
                     col_back3: "No. BACK-3",
                     "TGL_BACK-3_WARN": "Tgl BACK-3",
-                    "SISA_HARI_STR": "Sisa Waktu SLA"
+                    "SISA_HARI_STR": "Status / Sisa SLA"
                 }
                 warn_cols = [col_agenda, col_pabrik, col_pbck3, "TGL_PBCK-3_WARN", col_back3, "TGL_BACK-3_WARN", "SISA_HARI_STR"]
 
                 overdue_items = df_proses[df_proses['SISA_HARI_INT'] < 0].sort_values(by='SISA_HARI_INT')
                 critical_items = df_proses[(df_proses['SISA_HARI_INT'] >= 0) & (df_proses['SISA_HARI_INT'] <= 3)].sort_values(by='SISA_HARI_INT')
-                safe_items = df_proses[df_proses['SISA_HARI_INT'] > 3].sort_values(by='SISA_HARI_INT')
+                safe_or_pending_items = df_proses[(df_proses['SISA_HARI_INT'] > 3) | (df_proses['SISA_HARI_INT'].isna())].sort_values(by='SISA_HARI_INT', na_position='last')
 
                 if not overdue_items.empty:
                     st.error(f"🔴 **{len(overdue_items)} Berkas OVERDUE (Lewat Batas SLA)!**")
@@ -1869,9 +2442,9 @@ with col_sla_radar:
                 if not critical_items.empty:
                     st.warning(f"🟡 **{len(critical_items)} Berkas Jatuh Tempo Kritis (H-3 atau Kurang)!**")
                     st.dataframe(critical_items[warn_cols].rename(columns=warn_rename), hide_index=True, use_container_width=True)
-                elif not safe_items.empty:
-                    st.info(f"🔵 **{len(safe_items)} Berkas Outstanding Dalam Proses (Aman > 3 HK):**")
-                    st.dataframe(safe_items[warn_cols].rename(columns=warn_rename), hide_index=True, use_container_width=True)
+                elif not safe_or_pending_items.empty:
+                    st.info(f"🔵 **{len(safe_or_pending_items)} Berkas Outstanding Dalam Proses (Nilai Pengajuan: {fmt_exact_rp(cukai_on_process)} | {fmt_exact_bks(bks_on_process)} Bks):**")
+                    st.dataframe(safe_or_pending_items[warn_cols].rename(columns=warn_rename), hide_index=True, use_container_width=True)
                 else:
                     st.info("🔵 Bagus! Belum ada berkas dalam proses yang mendekati masa kritis (≤ 3 Hari).")
             else:
@@ -1905,11 +2478,23 @@ with st.container(border=True):
         df_display["TGL_CK-2_STR"] = df_display[col_tgl_ck2].dt.strftime('%d/%m/%Y').fillna("-") if col_tgl_ck2 in df_display.columns else "-"
 
         df_display["CUKAI_PENGAJUAN"] = df_display[col_cukai_pbck3].map(fmt_exact_rp)
-        df_display["CUKAI_REALISASI_CK2"] = df_display[col_cukai_ck2].map(fmt_exact_rp)
+        df_display["CUKAI_REALISASI_CK2"] = np.where(
+            df_display['STATUS_CK2_BOOL'] == "PROSES",
+            "Rp 0 (Proses)",
+            df_display[col_cukai_ck2].map(fmt_exact_rp)
+        )
         df_display["BIAYA_PENGGANTI_STR"] = df_display[col_biaya_pengganti].map(fmt_exact_rp)
         df_display["BKS_DIAJUKAN"] = df_display[col_bks_pbck3].map(fmt_exact_bks)
-        df_display["BKS_DISETUJUI_MS"] = df_display[col_bks_ck2].map(fmt_exact_bks)
-        df_display["BKS_DITOLAK_TMS"] = df_display['BUNGKUS_TMS'].map(fmt_exact_bks)
+        df_display["BKS_DISETUJUI_MS"] = np.where(
+            df_display['STATUS_CK2_BOOL'] == "PROSES",
+            "0 (Proses)",
+            df_display[col_bks_ck2].map(fmt_exact_bks)
+        )
+        df_display["BKS_DITOLAK_TMS"] = np.where(
+            df_display['STATUS_CK2_BOOL'] == "PROSES",
+            "0 (Proses)",
+            df_display['BUNGKUS_TMS'].map(fmt_exact_bks)
+        )
 
         col_agenda_main = "AGENDA" if "AGENDA" in df_display.columns else df_display.columns[0]
         rename_map = {
@@ -1918,6 +2503,8 @@ with st.container(border=True):
             col_pbck3: "No. PBCK-3",
             "TGL_PBCK-3_STR": "Tgl PBCK-3",
             "TAHUN_PC_STR": "Tahun PC",
+            "ASAL_BKC_STR": "Asal BKC",
+            "KEGIATAN_LOKASI_STR": "Kegiatan / Lokasi",
             "BKS_DIAJUKAN": "Bks Diajukan",
             "BKS_DISETUJUI_MS": "Bks Disetujui (MS)",
             "BKS_DITOLAK_TMS": "Bks Ditolak (TMS)",
@@ -1931,6 +2518,7 @@ with st.container(border=True):
         }
         kolom_final = [
             col_agenda_main, col_pabrik, col_pbck3, "TGL_PBCK-3_STR", "TAHUN_PC_STR",
+            "ASAL_BKC_STR", "KEGIATAN_LOKASI_STR",
             "BKS_DIAJUKAN", "BKS_DISETUJUI_MS", "BKS_DITOLAK_TMS",
             "CUKAI_PENGAJUAN", "CUKAI_REALISASI_CK2", "BIAYA_PENGGANTI_STR",
             col_back3, "TGL_BACK-3_STR", col_ck2, "TGL_CK-2_STR"
@@ -1941,7 +2529,7 @@ with st.container(border=True):
         with col_search:
             search_query = st.text_input(
                 "🔍 Cari",
-                placeholder="🔍 Cari Pabrik / No. PBCK-3 / BACK-3 / CK-2 / Agenda / Tahun PC...",
+                placeholder="🔍 Cari Pabrik / No. PBCK-3 / BACK-3 / CK-2 / Agenda / Tahun PC / Asal BKC / Kegiatan...",
                 label_visibility="collapsed"
             )
 
@@ -1952,6 +2540,8 @@ with st.container(border=True):
                 | df_tabel_rapi["Agenda"].astype(str).str.contains(q_str, case=False, na=False)
                 | df_tabel_rapi["No. PBCK-3"].astype(str).str.contains(q_str, case=False, na=False)
                 | df_tabel_rapi["Tahun PC"].astype(str).str.contains(q_str, case=False, na=False)
+                | df_tabel_rapi["Asal BKC"].astype(str).str.contains(q_str, case=False, na=False)
+                | df_tabel_rapi["Kegiatan / Lokasi"].astype(str).str.contains(q_str, case=False, na=False)
                 | df_tabel_rapi["No. BACK-3"].astype(str).str.contains(q_str, case=False, na=False)
                 | df_tabel_rapi["No. CK-2"].astype(str).str.contains(q_str, case=False, na=False)
             )
@@ -1984,6 +2574,8 @@ with st.container(border=True):
             "No. PBCK-3": st.column_config.TextColumn("No. PBCK-3", width="medium"),
             "Tgl PBCK-3": st.column_config.TextColumn("Tgl PBCK-3", width="small"),
             "Tahun PC": st.column_config.TextColumn("Tahun PC", width="small"),
+            "Asal BKC": st.column_config.TextColumn("Asal BKC", width="medium"),
+            "Kegiatan / Lokasi": st.column_config.TextColumn("Kegiatan / Lokasi", width="medium"),
             "Bks Diajukan": st.column_config.TextColumn("Bks Diajukan", width="small"),
             "Bks Disetujui (MS)": st.column_config.TextColumn("Bks Disetujui (MS)", width="small"),
             "Bks Ditolak (TMS)": st.column_config.TextColumn("Bks Ditolak (TMS)", width="small"),
@@ -2012,7 +2604,12 @@ with st.container(border=True):
                 selected_agenda = df_tabel_rapi.iloc[idx]["Agenda"]
                 selected_pbck3 = df_tabel_rapi.iloc[idx]["No. PBCK-3"]
                 selected_pc_row = df_tabel_rapi.iloc[idx]["Tahun PC"]
-                st.markdown(f"#### 🔍 Rincian Item untuk Dokumen: `{selected_pbck3}` (Agenda: `{selected_agenda}` | Tahun PC: `{selected_pc_row}`)")
+                selected_asal_row = df_tabel_rapi.iloc[idx]["Asal BKC"]
+                selected_giat_row = df_tabel_rapi.iloc[idx]["Kegiatan / Lokasi"]
+                st.markdown(
+                    f"#### 🔍 Rincian Item untuk Dokumen: `{selected_pbck3}` "
+                    f"(Agenda: `{selected_agenda}` | Tahun PC: `{selected_pc_row}` | Asal: `{selected_asal_row}` | Kegiatan: `{selected_giat_row}`)"
+                )
 
                 if not df_detail.empty:
                     col_dtl_agenda = "AGENDA" if "AGENDA" in df_detail.columns else ("NO. AGENDA" if "NO. AGENDA" in df_detail.columns else df_detail.columns[0])
